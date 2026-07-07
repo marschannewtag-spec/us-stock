@@ -63,8 +63,9 @@ export function generateBuys(quotes, rankedSectors, positions, params = STRATEGY
   const sectorInfo = Object.fromEntries(rankedSectors.map((s) => [s.etf, s]));
   const held = new Set(positions.map((p) => p.symbol));
   const cooling = new Set(recentlySold);
-  const slotsLeft = MAX_POSITIONS - positions.length;
-  if (slotsLeft <= 0) return []; // 需求 1: 滿 6 倉就不再買
+  const maxPos = params.maxPositions ?? MAX_POSITIONS;
+  const slotsLeft = maxPos - positions.length;
+  if (slotsLeft <= 0) return []; // 需求 1: 滿倉就不再買
 
   const candidates = quotes
     .filter((q) => hotETFs.has(q.etf))            // 只買熱門板塊

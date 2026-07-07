@@ -12,6 +12,8 @@ import { generateBuys, generateSells, buyDiagnostic, computeStops, MAX_POSITIONS
 import { Portfolio } from './portfolio.js';
 import { computeMarketGate, MARKET_PARAMS } from './market.js';
 import { putBars, getBars, putMeta, getMeta, clearAll } from './histdb.js';
+import { runRealBacktest } from './backtest-real.js';
+import { PRESETS } from './presets.js';
 import { runBacktest } from './backtest.js';
 
 // 依 config 選資料來源:真實(Twelve Data / Worker)或模擬
@@ -236,6 +238,8 @@ function renderSectors() {
 }
 
 let backtestResult = null;
+let realBtResult = null;  // 真實 16 年回測(綜合)
+let realBtRunning = false;
 let histMeta = null;      // 長歷史載入狀態
 let histLoading = false;
 let histProgress = '';
@@ -289,10 +293,15 @@ function renderBacktest() {
       <br>⚠️ universe 是「今天的贏家」,長歷史解決「樣本太短」,但<strong>解決不了生存者偏差</strong>——絕對報酬會偏樂觀,相對排名才可信。</div>
     ${histSection()}
 
-    <h2 class="block-head">合成資料回測 <span class="head-note">流程驗證(舊)</span></h2>
-    <div class="warn-box">下面是<strong>合成假資料</strong>,只證明引擎沒 bug。真正的「六姿態 + Monte Carlo」會用上面那份真實長歷史,是下一步。</div>
-    ${backtestResult ? backtestMetrics(backtestResult) : ''}
-    <button class="btn ghost wide" id="run-bt">▶ 用合成資料跑一次(驗流程)</button>`;
+    <h2 class="block-head">真實回測 <span class="head-note">綜合 preset · 16 年 · Calmar ${realBtResult ? realBtResult.metrics.calmar.toFixed(2) : '—'}</span></h2>
+    <div class="warn-box">用上方載入的真實 16 年日線跑「綜合」preset:隔日開盤進場、OHLC 真 ATR 停損、市場水位過濾。
+      <br>這是<strong>單一 preset</strong> 的驗證。下一步(B)會六姿態一起跑 + Monte Carlo,以 Calmar 排名。</div>
+    ${!histMeta
+      ? `<p class="empty">請先在上方「載入 16 年長歷史」,才能跑真實回測。</p>`
+      : realBtRunning
+        ? `<div class="loading" style="padding:32px"><div class="spinner"></div><p class="load-msg">回測 16 年中…</p></div>`
+        : `${realBtResult ? backtestMetrics(realBtResult) : ''}
+           <button class="btn buy wide" id="run-real-bt">▶ 用真實 16 年資料回測(綜合)</button>`}`;
 }
 
 function histSection() {
@@ -428,6 +437,25 @@ function bindViewEvents() {
   if (loadHist) loadHist.onclick = () => loadHistory();
   const reloadHist = document.getElementById('reload-hist');
   if (reloadHist) reloadHist.onclick = () => loadHistory();
+  const runReal = document.getElementById('run-real-bt');
+  if (runReal) runReal.onclick = async () => {
+    realBtRunning = true; render();
+    realBtResult = await runRealBacktestFromDB('composite');
+    realBtRunning = false; render();
+  };
+}
+
+// 從 IndexedDB 讀真實長歷史,跑指定 preset 的回測
+async function runRealBacktestFromDB(presetKey) {
+  const symbols = [...UNIVERSE.map((u) => u.symbol), 'SPY'];
+  const barsBySymbol = {};
+  for (const s of symbols) {
+    const b = await getBars(s);
+    if (b && b.length) barsBySymbol[s] = b;
+  }
+  if (!barsBySymbol['SPY']) return null;
+  const P = PRESETS[presetKey];
+  return runRealBacktest({ barsBySymbol, params: P.params, market: P.market });
 }
 
 // ---- 載入長歷史(Stooq via Worker)存 IndexedDB ----

@@ -83,38 +83,40 @@ export default {
       return withCORS(json(normalized), env);
     }
 
-    // ── 長歷史(回測用):代理 Stooq CSV,回 OHLC ──
+    // ── 長歷史(回測用):代理 Tiingo EOD,回調整後 OHLC ──
     if (url.pathname === '/history') {
-      const symbol = (url.searchParams.get('symbol') || '').trim().toLowerCase();
-      const years = parseInt(url.searchParams.get('years') || '16', 10);
+      const symbol = (url.searchParams.get('symbol') || '').trim();
+      const years = parseInt(url.searchParams.get('years') || '16', 10) || 16;
       if (!symbol) return withCORS(json({ error: 'symbol 必填' }, 400), env);
+      if (!env.TIINGO_KEY) return withCORS(json({ error: 'Worker 未設定 TIINGO_KEY secret' }, 500), env);
 
-      const d2 = new Date();
       const d1 = new Date(); d1.setFullYear(d1.getFullYear() - years);
-      const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
-      const stooqUrl = `https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol)}.us&i=d`
-        + `&d1=${fmt(d1)}&d2=${fmt(d2)}`;
+      const startDate = d1.toISOString().slice(0, 10);
+      const api = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(symbol)}/prices`
+        + `?startDate=${startDate}&token=${env.TIINGO_KEY}`;
 
-      let csv;
+      let data;
       try {
-        const r = await fetch(stooqUrl, { cf: { cacheTtl: 86400, cacheEverything: true } });
-        csv = await r.text();
+        const r = await fetch(api, {
+          headers: { 'Content-Type': 'application/json' },
+          cf: { cacheTtl: 86400, cacheEverything: true },
+        });
+        data = await r.json();
       } catch (e) {
-        return withCORS(json({ error: 'stooq 抓取失敗', detail: String(e) }, 502), env);
+        return withCORS(json({ error: 'tiingo 抓取失敗', detail: String(e) }, 502), env);
       }
-      // Stooq 找不到會回 HTML 或 "No data"
-      if (!csv || csv.startsWith('<') || /no data|exceeded|limit/i.test(csv)) {
-        return withCORS(json({ symbol: symbol.toUpperCase(), bars: [], note: 'stooq 無資料或限流' }), env);
+      // 成功回陣列;失敗會回物件 { detail: "..." }
+      if (!Array.isArray(data)) {
+        return withCORS(json({ symbol: symbol.toUpperCase(), bars: [], note: (data && data.detail) || 'tiingo 無資料' }), env);
       }
 
-      const lines = csv.trim().split('\n');
       const bars = [];
-      for (let i = 1; i < lines.length; i++) { // 跳過表頭 Date,Open,High,Low,Close,Volume
-        const p = lines[i].split(',');
-        if (p.length < 5) continue;
-        const o = +p[1], h = +p[2], l = +p[3], c = +p[4];
+      for (const v of data) {
+        // 用調整後價格(分割 + 股息都調整)—— 回測更正確
+        const o = +(v.adjOpen ?? v.open), h = +(v.adjHigh ?? v.high),
+              l = +(v.adjLow ?? v.low), c = +(v.adjClose ?? v.close);
         if (isNaN(c) || isNaN(h) || isNaN(l)) continue;
-        bars.push({ d: p[0], o, h, l, c });
+        bars.push({ d: (v.date || '').slice(0, 10), o, h, l, c });
       }
       return withCORS(json({ symbol: symbol.toUpperCase(), bars }), env);
     }
