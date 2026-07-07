@@ -51,6 +51,8 @@ function snapshotAt(priceMatrix, t) {
 }
 
 export function runBacktest({ priceMatrix, dates, params = STRATEGY_PARAMS, rebalanceEvery = 5 }) {
+  // 回測目前為全進全出(不含分批階梯);階梯 + OHLC 停損會在 Monte Carlo 步驟一起整合。
+  params = { ...params, enableProfitLadder: false };
   let positions = [];           // 回測用持倉
   const equity = [];            // 權益曲線 (等權重，初始 1.0)
   let nav = 1.0;

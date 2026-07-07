@@ -39,31 +39,82 @@ export class Portfolio {
   has(symbol) { return this.positions.some((p) => p.symbol === symbol); }
 
   // 買進。需求 1: 滿 6 倉或已持有 -> 拒絕。
-  buy({ symbol, name, etf, price, shares = 1 }) {
+  buy({ symbol, name, etf, price, shares = 1, stopPrice = null, atr = null }) {
     if (this.isFull()) return { ok: false, msg: '已達 6 倉上限' };
     if (this.has(symbol)) return { ok: false, msg: '已持有此標的' };
     this.positions.push({
       symbol, name, etf, shares,
       entryPrice: price, peakPrice: price,
+      stopPrice, atr,                                  // 進場時鎖定的 ATR 停損價
+      size: 1, laddersFired: [],                       // 分批停利:剩餘比例 + 已觸發的階
       entryDate: new Date().toISOString().slice(0, 10),
     });
     this.save();
     return { ok: true };
   }
 
-  // 賣出 (平倉)，把已實現損益記進 cashLog
-  sell(symbol, price) {
+  // 賣出。fraction = 要賣掉的「原始部位比例」(1 = 全平)。
+  // ladderIdx 有值代表這是階梯停利觸發,記下來避免同一階重複觸發。
+  sellPartial(symbol, price, fraction = 1, reason = '手動平倉', ladderIdx = null) {
     const i = this.positions.findIndex((p) => p.symbol === symbol);
     if (i < 0) return { ok: false, msg: '未持有' };
     const pos = this.positions[i];
+    const size = pos.size ?? 1;
+    const sellSize = Math.min(fraction, size);
     const pnlPct = (price - pos.entryPrice) / pos.entryPrice;
+    const exitDate = new Date().toISOString().slice(0, 10);
+    const holdingDays = Math.max(0, Math.round((new Date(exitDate) - new Date(pos.entryDate)) / 86400000));
+    const partial = sellSize < size - 1e-9;
+
     this.cashLog.push({
-      symbol, entryPrice: pos.entryPrice, exitPrice: price, pnlPct,
-      entryDate: pos.entryDate, exitDate: new Date().toISOString().slice(0, 10),
+      symbol, name: pos.name, entryPrice: pos.entryPrice, exitPrice: price, pnlPct,
+      fraction: sellSize, partial,
+      entryDate: pos.entryDate, exitDate, holdingDays, reason,
     });
-    this.positions.splice(i, 1);
+
+    pos.size = size - sellSize;
+    if (ladderIdx != null) { (pos.laddersFired = pos.laddersFired || []).push(ladderIdx); }
+    if (pos.size <= 1e-6) this.positions.splice(i, 1);
     this.save();
-    return { ok: true, pnlPct };
+    return { ok: true, pnlPct, remaining: pos.size > 1e-6 ? pos.size : 0 };
+  }
+
+  // 全平(手動平倉 / 停損等):賣掉剩餘全部
+  sell(symbol, price, reason = '手動平倉') {
+    return this.sellPartial(symbol, price, 1, reason);
+  }
+
+  // 績效統計 + 資金成長曲線(百分比複利,起點 100)
+  perf() {
+    const log = this.cashLog;
+    const trades = log.length;
+    const equity = [{ i: 0, nav: 100 }];
+    if (trades === 0) {
+      return { trades: 0, equity, totalReturn: 0, winRate: 0, avgWin: 0, avgLoss: 0, payoff: 0, profitFactor: 0, maxDD: 0 };
+    }
+    let nav = 100;
+    const wins = [], losses = [];
+    log.forEach((c, idx) => {
+      const frac = c.fraction ?? 1;              // 部分出場只按賣掉的比例計入
+      nav *= (1 + frac * c.pnlPct);
+      equity.push({ i: idx + 1, nav, symbol: c.symbol, pnlPct: c.pnlPct });
+      (c.pnlPct >= 0 ? wins : losses).push(c.pnlPct);
+    });
+    const totalReturn = nav / 100 - 1;
+    const avgWin = wins.length ? wins.reduce((a, b) => a + b, 0) / wins.length : 0;
+    const avgLoss = losses.length ? losses.reduce((a, b) => a + b, 0) / losses.length : 0;
+    const grossWin = wins.reduce((a, b) => a + b, 0);
+    const grossLoss = Math.abs(losses.reduce((a, b) => a + b, 0));
+    let peak = 100, maxDD = 0;
+    equity.forEach((e) => { peak = Math.max(peak, e.nav); maxDD = Math.min(maxDD, e.nav / peak - 1); });
+    return {
+      trades, equity, totalReturn,
+      winRate: wins.length / trades,
+      avgWin, avgLoss,
+      payoff: avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : 0,
+      profitFactor: grossLoss > 0 ? grossWin / grossLoss : 0,
+      maxDD,
+    };
   }
 
   // 每日用最新報價更新持倉的現價與「持倉最高價」(移動停利要用)

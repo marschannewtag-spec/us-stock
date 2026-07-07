@@ -12,6 +12,8 @@
 //   advanceDay()                 -> void       (僅模擬器需要) 推進到下一個交易日
 // =============================================================
 
+import { atr } from './indicators.js';
+
 // ---- 11 個 SPDR 板塊 ETF (美股板塊輪動的標準分類) ----
 export const SECTORS = [
   { etf: 'XLK', name: '科技 Technology' },
@@ -128,6 +130,10 @@ export class MockDataAdapter {
       const start = 40 + this.rng() * 360;
       this.series[u.symbol] = this._genPath(u, start, 260); // ~1 年歷史
     });
+
+    // 市場水位用:合成 SPY(緩升多頭,只取收盤)+ VIX(14~26 區間)
+    this.spySeries = this._genPath({ etf: 'XLK' }, 400, 300).map((b) => b.c);
+    this.vixSeries = Array.from({ length: 300 }, () => 14 + this.rng() * 12);
   }
 
   _sectorDrift(etf, t) {
@@ -144,24 +150,28 @@ export class MockDataAdapter {
       const vol = 0.012 + this.rng() * 0.02;          // 個股波動
       const shock = (this.rng() - 0.5) * 2 * vol;
       price = Math.max(1, price * (1 + drift + shock));
-      bars.push(price);
+      // 合成當日高低(圍繞收盤,製造日內波動供 ATR 用)
+      const rng = price * (0.005 + this.rng() * 0.02);
+      bars.push({ h: price + this.rng() * rng, l: price - this.rng() * rng, c: price });
     }
     return bars;
   }
 
-  // ---- 工具: 從價格序列算出衍生指標 ----
+  // ---- 工具: 從 OHLC 序列算出衍生指標(含 ATR)----
   _metrics(bars) {
-    const last = bars[bars.length - 1];
-    const prev = bars[bars.length - 2] ?? last;
+    const closes = bars.map((b) => b.c);
+    const last = closes[closes.length - 1];
+    const prev = closes[closes.length - 2] ?? last;
     const ma = (k) => {
-      const slice = bars.slice(-k);
+      const slice = closes.slice(-k);
       return slice.reduce((a, b) => a + b, 0) / slice.length;
     };
     const ret = (k) => {
-      const past = bars[bars.length - 1 - k];
+      const past = closes[closes.length - 1 - k];
       return past ? (last - past) / past : 0;
     };
     const ma20 = ma(20), ma50 = ma(50);
+    const a = atr(bars, 14);
     return {
       price: last,
       prevClose: prev,
@@ -171,20 +181,21 @@ export class MockDataAdapter {
       relMA50: (last - ma50) / ma50,
       ret1m: ret(21),   // 約 1 個月 (21 交易日)
       ret3m: ret(63),   // 約 3 個月
+      atr: a, atrPct: a ? a / last : null,
     };
   }
 
   // ===== DataAdapter 介面實作 =====
   getUniverse() { return UNIVERSE; }
 
-  getQuotes() {
+  async getQuotes() {
     return UNIVERSE.map((u) => {
       const m = this._metrics(this.series[u.symbol]);
       return { symbol: u.symbol, name: u.name, etf: u.etf, ...m };
     });
   }
 
-  getSectorETFs() {
+  async getSectorETFs() {
     // 用該板塊所有成分股的平均表現代表 ETF (起步用；之後可直接抓 ETF 行情)
     return SECTORS.map((s) => {
       const members = UNIVERSE.filter((u) => u.etf === s.etf)
@@ -197,9 +208,14 @@ export class MockDataAdapter {
     });
   }
 
-  getHistorical(symbol, days = 252) {
+  async getHistorical(symbol, days = 252) {
     const bars = this.series[symbol] || [];
-    return bars.slice(-days);
+    return bars.map((b) => b.c).slice(-days); // 回測用收盤價
+  }
+
+  // 市場水位資料(模擬):SPY + VIX
+  async getMarketSeries() {
+    return { spy: this.spySeries, vix: this.vixSeries };
   }
 
   // 模擬「過一天」: 每檔股票走一步。真實版本不需要這個。
@@ -210,10 +226,18 @@ export class MockDataAdapter {
       const drift = this._sectorDrift(u.etf, 260 + this.day);
       const vol = 0.012 + this.rng() * 0.02;
       const shock = (this.rng() - 0.5) * 2 * vol;
-      const last = bars[bars.length - 1];
-      bars.push(Math.max(1, last * (1 + drift + shock)));
+      const last = bars[bars.length - 1].c;
+      const price = Math.max(1, last * (1 + drift + shock));
+      const rng = price * (0.005 + this.rng() * 0.02);
+      bars.push({ h: price + this.rng() * rng, l: price - this.rng() * rng, c: price });
       if (bars.length > 400) bars.shift();
     });
+    // SPY / VIX 也走一步(收盤數字)
+    const spyLast = this.spySeries[this.spySeries.length - 1];
+    this.spySeries.push(Math.max(1, spyLast * (1 + 0.0005 + (this.rng() - 0.5) * 0.02)));
+    this.vixSeries.push(14 + this.rng() * 12);
+    if (this.spySeries.length > 400) this.spySeries.shift();
+    if (this.vixSeries.length > 400) this.vixSeries.shift();
   }
 }
 
