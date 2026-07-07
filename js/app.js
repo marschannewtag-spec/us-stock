@@ -13,7 +13,7 @@ import { Portfolio } from './portfolio.js';
 import { computeMarketGate, MARKET_PARAMS } from './market.js';
 import { putBars, getBars, putMeta, getMeta, clearAll } from './histdb.js';
 import { runRealBacktest } from './backtest-real.js';
-import { PRESETS } from './presets.js';
+import { PRESETS, PRESET_ORDER } from './presets.js';
 import { runBacktest } from './backtest.js';
 
 // 依 config 選資料來源:真實(Twelve Data / Worker)或模擬
@@ -240,6 +240,10 @@ function renderSectors() {
 let backtestResult = null;
 let realBtResult = null;  // 真實 16 年回測(綜合)
 let realBtRunning = false;
+let mcRunning = false;    // 六姿態 Monte Carlo
+let mcProgress = '';
+let mcResults = null;
+let mcError = null;
 let histMeta = null;      // 長歷史載入狀態
 let histLoading = false;
 let histProgress = '';
@@ -301,7 +305,46 @@ function renderBacktest() {
       : realBtRunning
         ? `<div class="loading" style="padding:32px"><div class="spinner"></div><p class="load-msg">回測 16 年中…</p></div>`
         : `${realBtResult ? backtestMetrics(realBtResult) : ''}
-           <button class="btn buy wide" id="run-real-bt">▶ 用真實 16 年資料回測(綜合)</button>`}`;
+           <button class="btn ghost wide" id="run-real-bt">▶ 用真實 16 年資料回測(綜合)</button>`}
+
+    <h2 class="block-head">六姿態比較 <span class="head-note">Monte Carlo 300 次 · Calmar 排名</span></h2>
+    <div class="warn-box">六個 preset 各跑 16 年真實回測,再各做 300 次 block bootstrap(把日報酬打散重組),看績效換個順序還站不站得住。
+      <br>看<strong>相對排名</strong>就好,絕對數字仍被生存者偏差灌水。<strong>Calmar 最差 5%</strong> 是壓力測試下的下限。</div>
+    ${mcSection()}`;
+}
+
+function mcSection() {
+  if (!histMeta) return `<p class="empty">請先載入長歷史。</p>`;
+  if (mcRunning) {
+    return `<div class="loading" style="padding:32px"><div class="spinner"></div><p class="load-msg">${mcProgress}</p></div>`;
+  }
+  if (mcError) return `<p class="empty">${mcError}</p><button class="btn buy wide" id="run-mc">▶ 重試</button>`;
+  if (!mcResults) {
+    return `<p class="empty">六姿態一起跑 + Monte Carlo(手機約 20~40 秒,中途會卡一下屬正常)。</p>
+      <button class="btn buy wide" id="run-mc">▶ 跑六姿態 + Monte Carlo (300 次)</button>`;
+  }
+  const rows = mcResults.map((r, i) => {
+    const win = i === 0;
+    return `<tr class="${win ? 'mc-win' : ''}">
+      <td class="mono">${i + 1}</td>
+      <td>${r.label}${win ? ' 🏆' : ''}</td>
+      <td class="mono">${r.mc.calmar.median.toFixed(2)}</td>
+      <td class="mono down">${r.mc.calmar.p5.toFixed(2)}</td>
+      <td class="mono up">${(r.mc.cagr.median * 100).toFixed(0)}%</td>
+      <td class="mono down">${(r.mc.maxdd.median * 100).toFixed(0)}%</td>
+      <td class="mono">${r.single.trades}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="mc-table-wrap"><table class="mc-table">
+      <thead><tr>
+        <th>#</th><th>姿態</th><th>Calmar<br>中位</th><th>Calmar<br>最差5%</th><th>CAGR<br>中位</th><th>MaxDD<br>中位</th><th>交易</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="hint" style="margin-top:12px">冠軍 <strong>${mcResults[0].label}</strong>:Calmar 中位 ${mcResults[0].mc.calmar.median.toFixed(2)}、
+    最差 5% 仍有 ${mcResults[0].mc.calmar.p5.toFixed(2)}。這是「風險調整後 + 耐操度」都最好的姿態。</p>
+    <button class="btn ghost wide" id="run-mc" style="margin-top:12px">↻ 重跑</button>`;
 }
 
 function histSection() {
@@ -443,19 +486,83 @@ function bindViewEvents() {
     realBtResult = await runRealBacktestFromDB('composite');
     realBtRunning = false; render();
   };
+  const runMc = document.getElementById('run-mc');
+  if (runMc) runMc.onclick = () => runAllPresetsMC();
 }
 
-// 從 IndexedDB 讀真實長歷史,跑指定 preset 的回測
-async function runRealBacktestFromDB(presetKey) {
+// 從 IndexedDB 一次讀齊所有 bars
+async function loadAllBarsFromDB() {
   const symbols = [...UNIVERSE.map((u) => u.symbol), 'SPY'];
   const barsBySymbol = {};
   for (const s of symbols) {
     const b = await getBars(s);
     if (b && b.length) barsBySymbol[s] = b;
   }
+  return barsBySymbol;
+}
+
+// 從 IndexedDB 讀真實長歷史,跑指定 preset 的回測
+async function runRealBacktestFromDB(presetKey) {
+  const barsBySymbol = await loadAllBarsFromDB();
   if (!barsBySymbol['SPY']) return null;
   const P = PRESETS[presetKey];
   return runRealBacktest({ barsBySymbol, params: P.params, market: P.market });
+}
+
+// 六姿態 + Monte Carlo
+async function runAllPresetsMC() {
+  mcRunning = true; mcError = null; mcResults = null; mcProgress = '讀取歷史資料…'; render();
+  await sleep(30);
+  const barsBySymbol = await loadAllBarsFromDB();
+  if (!barsBySymbol['SPY']) { mcRunning = false; mcError = '找不到 SPY 歷史,請先載入長歷史。'; render(); return; }
+
+  const results = [];
+  for (const key of PRESET_ORDER) {
+    mcProgress = `回測 + Monte Carlo:${PRESETS[key].label} … (${results.length + 1}/6)`;
+    render();
+    await sleep(30); // 讓進度先畫出來,再進重運算
+    const P = PRESETS[key];
+    const bt = runRealBacktest({ barsBySymbol, params: P.params, market: P.market });
+    const mc = monteCarlo(bt.dailyReturns, 300, 20);
+    results.push({ key, label: P.label, single: bt.metrics, mc });
+    await sleep(0);
+  }
+  // 以 Calmar 中位數排名
+  results.sort((a, b) => (b.mc?.calmar.median ?? -99) - (a.mc?.calmar.median ?? -99));
+  mcResults = results; mcRunning = false; render();
+}
+
+// block bootstrap:把日報酬打散成長度相同的區塊重組,跑 runs 次,回各指標分佈
+function monteCarlo(rets, runs = 300, blockSize = 20) {
+  const n = rets.length;
+  if (n < blockSize * 3) return { calmar: { median: 0, p5: 0 }, cagr: { median: 0, p5: 0 }, maxdd: { median: 0, worst: 0 }, sharpe: { median: 0 } };
+  const nBlocks = Math.ceil(n / blockSize);
+  const calmars = [], cagrs = [], maxdds = [], sharpes = [];
+  for (let r = 0; r < runs; r++) {
+    const series = [];
+    for (let b = 0; b < nBlocks; b++) {
+      const start = Math.floor(Math.random() * (n - blockSize));
+      for (let k = 0; k < blockSize; k++) series.push(rets[start + k]);
+    }
+    series.length = n;
+    let nav = 1, peak = 1, maxDD = 0, sum = 0;
+    for (const x of series) { nav *= (1 + x); peak = Math.max(peak, nav); maxDD = Math.min(maxDD, nav / peak - 1); sum += x; }
+    const years = n / 252;
+    const cagr = Math.pow(Math.max(nav, 1e-9), 1 / years) - 1;
+    const mean = sum / n;
+    let v = 0; for (const x of series) v += (x - mean) ** 2;
+    const sd = Math.sqrt(v / n) || 1e-9;
+    cagrs.push(cagr); maxdds.push(maxDD);
+    sharpes.push(mean / sd * Math.sqrt(252));
+    calmars.push(maxDD !== 0 ? cagr / Math.abs(maxDD) : 0);
+  }
+  const q = (arr, p) => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(p * (s.length - 1))]; };
+  return {
+    calmar: { median: q(calmars, 0.5), p5: q(calmars, 0.05) },
+    cagr: { median: q(cagrs, 0.5), p5: q(cagrs, 0.05) },
+    maxdd: { median: q(maxdds, 0.5), worst: q(maxdds, 0.05) },
+    sharpe: { median: q(sharpes, 0.5) },
+  };
 }
 
 // ---- 載入長歷史(Stooq via Worker)存 IndexedDB ----
