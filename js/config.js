@@ -11,7 +11,7 @@ export const config = {
   // ── 你的 Cloudflare Worker 網址(部署後填這裡)──
   // 例:https://signaldesk-worker.你的帳號.workers.dev
   // 尚未部署前先留空,App 會提示你去設定。
-  WORKER_URL: '',
+  WORKER_URL: 'https://stock.marschannewtag.workers.dev',
 
   // ── 免費層節流 ──
   // Twelve Data 免費層:每分鐘 8 credits。一次抓 8 檔,批次之間間隔 60 秒。
@@ -21,7 +21,4 @@ export const config = {
 
   // 抓幾天日線(算 MA50 / 3M 動能需要,260 ≈ 一年交易日)
   OUTPUT_SIZE: 260,
-
-  // 回測用長歷史深度(年)。透過 Worker /history 從 Stooq 拉,存 IndexedDB。
-  HISTORY_YEARS: 16,
 };
