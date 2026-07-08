@@ -8,7 +8,8 @@ import { MockDataAdapter, SECTORS, UNIVERSE } from './data.js';
 import { RealDataAdapter } from './data-real.js';
 import { config } from './config.js';
 import { rankSectors } from './sectors.js';
-import { generateBuys, generateSells, buyDiagnostic, computeStops, MAX_POSITIONS, STRATEGY_PARAMS } from './strategy.js';
+import { generateBuys, generateSells, buyDiagnostic, computeStops, verifyCandidate, MAX_POSITIONS, STRATEGY_PARAMS } from './strategy.js';
+import { quoteMetrics } from './indicators.js';
 import { Portfolio } from './portfolio.js';
 import { computeMarketGate, MARKET_PARAMS } from './market.js';
 import { putBars, getBars, putMeta, getMeta, clearAll } from './histdb.js';
@@ -20,31 +21,41 @@ import { runBacktest } from './backtest.js';
 const adapter = config.USE_REAL_DATA ? new RealDataAdapter(config) : new MockDataAdapter();
 const portfolio = new Portfolio();
 
+// 日常「今日」分頁採用的姿態 preset(單一來源,改 config.DAILY_PRESET 即可切換)
+const DAILY = PRESETS[config.DAILY_PRESET] || PRESETS.composite;
+const DP = DAILY.params;                       // 日常策略參數
+const DM = DAILY.market;                        // 日常市場水位參數
+const DAILY_MAX = DP.maxPositions ?? MAX_POSITIONS;
+
 let state = {
   tab: 'today',
   date: new Date(),
   quotes: [], ranked: [], buys: [], sells: [],
   loading: false, loadMsg: '',
+  candInput: '',
 };
+let exploreRunning = false;
+let exploreProgress = '';
+let exploreResults = null;
 
 // ---- 每天重新計算: 報價 -> 板塊排名 -> 買賣訊號 ----
 async function compute() {
   state.quotes = await adapter.getQuotes();
   portfolio.mark(state.quotes);
-  state.ranked = rankSectors(await adapter.getSectorETFs(), STRATEGY_PARAMS.hotSectorCount);
+  state.ranked = rankSectors(await adapter.getSectorETFs(), DP.hotSectorCount);
 
   // 不重複:算出還在冷卻期(近 N 天賣掉)的代號,買進時排除
-  const recentlySold = recentlySoldSymbols(STRATEGY_PARAMS.reentryCooldownDays);
+  const recentlySold = recentlySoldSymbols(DP.reentryCooldownDays);
 
-  state.buys = generateBuys(state.quotes, state.ranked, portfolio.positions, STRATEGY_PARAMS, recentlySold);
-  state.sells = generateSells(portfolio.positions, state.quotes, state.ranked);
+  state.buys = generateBuys(state.quotes, state.ranked, portfolio.positions, DP, recentlySold);
+  state.sells = generateSells(portfolio.positions, state.quotes, state.ranked, DP);
 
   // 若今天沒補滿,算一下「差在哪」給使用者看(證明是門檻在把關)
-  state.buyDiag = buyDiagnostic(state.quotes, state.ranked, portfolio.positions, STRATEGY_PARAMS, recentlySold);
+  state.buyDiag = buyDiagnostic(state.quotes, state.ranked, portfolio.positions, DP, recentlySold);
 
   // AI 水位:市場層級總開關(防禦時暫停進場)
   const mkt = await adapter.getMarketSeries();
-  state.market = computeMarketGate(mkt.spy, mkt.vix, MARKET_PARAMS);
+  state.market = computeMarketGate(mkt.spy, mkt.vix, DM);
 }
 
 // 從已實現紀錄找出近 N 天賣出的代號(冷卻期,避免買→賣→馬上再買的來回洗)
@@ -65,14 +76,14 @@ const money = (x) => `$${x.toFixed(2)}`;
 // =============================================================
 function renderToday() {
   const s = portfolio.stats();
-  const slots = MAX_POSITIONS - portfolio.positions.length;
+  const slots = DAILY_MAX - portfolio.positions.length;
   const blocked = state.market && state.market.available && !state.market.riskOn;
 
   return `
     <section class="summary">
       <div class="summary-row">
         <div class="metric"><span class="metric-label">持倉</span>
-          <span class="metric-val mono">${s.open}<span class="slash">/${MAX_POSITIONS}</span></span></div>
+          <span class="metric-val mono">${s.open}<span class="slash">/${DAILY_MAX}</span></span></div>
         <div class="metric"><span class="metric-label">未實現均報酬</span>
           <span class="metric-val mono ${cls(s.unrealAvgPct)}">${pct(s.unrealAvgPct)}</span></div>
         <div class="metric"><span class="metric-label">已實現累計</span>
@@ -185,13 +196,13 @@ function renderPortfolio() {
   }
   const quoteBy = Object.fromEntries(state.quotes.map((q) => [q.symbol, q]));
   return `
-    <h2 class="block-head">現有持倉 <span class="head-note">${portfolio.positions.length}/${MAX_POSITIONS}</span></h2>
+    <h2 class="block-head">現有持倉 <span class="head-note">${portfolio.positions.length}/${DAILY_MAX}</span></h2>
     ${portfolio.positions.map((p) => {
       const q = quoteBy[p.symbol];
       const last = q ? q.price : (p.lastPrice ?? p.entryPrice);
       const pnl = (last - p.entryPrice) / p.entryPrice;
       const secName = SECTORS.find((x) => x.etf === p.etf)?.name || p.etf;
-      const { hardStop, trailStop, effStop } = computeStops(p, STRATEGY_PARAMS);
+      const { hardStop, trailStop, effStop } = computeStops(p, DP);
       const maRef = q ? `MA20 $${q.ma20.toFixed(2)} · MA50 $${q.ma50.toFixed(2)}` : '';
       return `
         <div class="card pos">
@@ -218,7 +229,7 @@ function renderPortfolio() {
 function renderSectors() {
   const max = Math.max(...state.ranked.map((s) => Math.abs(s.score)), 1);
   return `
-    <h2 class="block-head">板塊熱度排名 <span class="head-note">前 ${STRATEGY_PARAMS.hotSectorCount} 名才選股</span></h2>
+    <h2 class="block-head">板塊熱度排名 <span class="head-note">前 ${DP.hotSectorCount} 名才選股</span></h2>
     <p class="hint">分數 = 0.5·1M報酬 + 0.3·3M報酬 + 0.2·相對MA50 (標準化後)</p>
     <div class="heat">
       ${state.ranked.map((s) => {
@@ -411,7 +422,51 @@ function equitySVG(equity) {
 // =============================================================
 // 主渲染 + 事件
 // =============================================================
-const views = { today: renderToday, portfolio: renderPortfolio, sectors: renderSectors, perf: renderPerf, backtest: renderBacktest };
+// ---- 探索:候選驗證器 ----
+function renderExplore() {
+  const wl = getWatchlist();
+  return `
+    <h2 class="block-head">候選驗證器 <span class="head-note">貼清單 · 引擎硬門檻驗證</span></h2>
+    <div class="warn-box">從 ChatGPT / 你的研究拿到的候選股,貼進來(逗號或空白分隔)。SignalDesk 會抓<strong>真實資料</strong>、跑跟「今日」同一套硬門檻,告訴你誰<strong>現在真的夠強</strong>。AI 撒網、資料驗證——這是影片說的「AI 輔助、人驗證」。</div>
+    <textarea id="cand-input" class="cand-input" placeholder="例:PLTR, SMCI, VRT, ANET, CRWD">${escapeHtml(state.candInput || '')}</textarea>
+    <button class="btn buy wide" id="verify-btn">▶ 驗證候選</button>
+    ${wl.length ? `<div class="wl"><span class="wl-label">自訂觀察名單</span>${wl.map((s) => `<span class="wl-chip mono">${s}<button data-unwatch="${s}">×</button></span>`).join('')}</div>` : ''}
+    ${exploreRunning ? `<div class="loading" style="padding:24px"><div class="spinner"></div><p class="load-msg">${exploreProgress}</p></div>` : ''}
+    ${exploreResults ? renderExploreResults() : ''}`;
+}
+
+function renderExploreResults() {
+  const passN = exploreResults.filter((r) => r.pass).length;
+  return `
+    <h2 class="block-head">驗證結果 <span class="head-note">${passN}/${exploreResults.length} 通過</span></h2>
+    ${exploreResults.map((r) => {
+      if (r.insufficient) {
+        return `<div class="card"><div class="card-main"><div class="ticker mono">${r.symbol}</div>
+          <div class="card-sub">資料不足或代號無效(Twelve Data 沒回足夠日線)</div></div></div>`;
+      }
+      const badge = r.pass ? `<span class="verdict pass">通過</span>` : `<span class="verdict fail">未通過</span>`;
+      return `
+        <div class="card ${r.pass ? '' : 'dim'}">
+          <div class="card-main">
+            <div class="ticker mono">${r.symbol} ${badge}</div>
+            <div class="reasons">${r.checks.map((c) => `<span class="tag ${c.ok ? 'okc' : 'nok'}">${c.ok ? '✓' : '✗'} ${c.label}</span>`).join('')}</div>
+            ${r.pass ? `<div class="levels mono">進場 約$${r.entry.toFixed(2)}　·　停損 $${r.stopPrice.toFixed(2)} (${pct(r.stopPct)})</div>` : ''}
+          </div>
+          <div class="card-side">
+            <div class="price mono">$${r.price.toFixed(2)}</div>
+            <div class="score">動能 ${r.score.toFixed(2)}</div>
+            ${r.pass ? `<button class="btn ghost" data-watch="${r.symbol}">★ 觀察</button>` : ''}
+          </div>
+        </div>`;
+    }).join('')}`;
+}
+
+function getWatchlist() { try { return JSON.parse(localStorage.getItem('sd_watchlist') || '[]'); } catch (e) { return []; } }
+function saveWatch(s) { const w = getWatchlist(); if (!w.includes(s)) { w.push(s); localStorage.setItem('sd_watchlist', JSON.stringify(w)); } render(); }
+function removeWatch(s) { localStorage.setItem('sd_watchlist', JSON.stringify(getWatchlist().filter((x) => x !== s))); render(); }
+function escapeHtml(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+const views = { today: renderToday, portfolio: renderPortfolio, sectors: renderSectors, explore: renderExplore, perf: renderPerf, backtest: renderBacktest };
 
 function render() {
   const view = document.getElementById('view');
@@ -448,8 +503,8 @@ function bindViewEvents() {
     el.onclick = async () => {
       const q = state.quotes.find((x) => x.symbol === el.dataset.buy);
       const stopPrice = q.atr
-        ? q.price - q.atr * STRATEGY_PARAMS.atrStopMult
-        : q.price * (1 + STRATEGY_PARAMS.stopLossPct);
+        ? q.price - q.atr * DP.atrStopMult
+        : q.price * (1 + DP.stopLossPct);
       const r = portfolio.buy({ symbol: q.symbol, name: q.name, etf: q.etf, price: q.price, stopPrice, atr: q.atr });
       if (!r.ok) toast(r.msg); else toast(`已買進 ${q.symbol}`);
       await compute(); render();
@@ -488,6 +543,57 @@ function bindViewEvents() {
   };
   const runMc = document.getElementById('run-mc');
   if (runMc) runMc.onclick = () => runAllPresetsMC();
+  const verifyBtn = document.getElementById('verify-btn');
+  if (verifyBtn) verifyBtn.onclick = () => verifyCandidates();
+  document.querySelectorAll('[data-watch]').forEach((el) => el.onclick = () => saveWatch(el.dataset.watch));
+  document.querySelectorAll('[data-unwatch]').forEach((el) => el.onclick = () => removeWatch(el.dataset.unwatch));
+}
+
+// 抓任意代號的日線(候選驗證器用),回 {SYM: bars[]}
+async function fetchCandidates(tickers) {
+  const barsBySym = {};
+  const BATCH = config.BATCH_SIZE || 8, GAP = config.BATCH_GAP_MS || 0;
+  for (let i = 0; i < tickers.length; i += BATCH) {
+    const batch = tickers.slice(i, i + BATCH);
+    exploreProgress = `讀取 ${batch.join(', ')} …`; render();
+    const u = `${config.WORKER_URL.replace(/\/$/, '')}/timeseries?symbols=${encodeURIComponent(batch.join(','))}&outputsize=${config.OUTPUT_SIZE}`;
+    const r = await fetch(u);
+    const d = await r.json();
+    if (d.error) throw new Error(d.message || d.error);
+    for (const s of batch) {
+      const node = d[s] || d[s.toUpperCase()];
+      const values = (node && node.values) || [];
+      barsBySym[s] = values
+        .map((v) => ({ h: parseFloat(v.high), l: parseFloat(v.low), c: parseFloat(v.close) }))
+        .filter((b) => !isNaN(b.c) && !isNaN(b.h) && !isNaN(b.l));
+    }
+    if (i + BATCH < tickers.length && GAP > 0) { exploreProgress = '等待額度重置…'; render(); await sleep(GAP); }
+  }
+  return barsBySym;
+}
+
+async function verifyCandidates() {
+  const el = document.getElementById('cand-input');
+  const raw = el ? el.value : '';
+  state.candInput = raw;
+  const tickers = [...new Set(raw.split(/[\s,;]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))].slice(0, 24);
+  if (!tickers.length) { toast('請先輸入代號'); return; }
+  if (!config.WORKER_URL) { toast('尚未設定 Worker 網址'); return; }
+  exploreRunning = true; exploreResults = null; render();
+  try {
+    const bars = await fetchCandidates(tickers);
+    const results = tickers.map((t) => {
+      const m = quoteMetrics(bars[t]);
+      if (!m) return { symbol: t, insufficient: true };
+      const v = verifyCandidate({ symbol: t, ...m }, DP);
+      return { symbol: t, price: m.price, ...v };
+    });
+    results.sort((a, b) => (b.pass ? 1 : 0) - (a.pass ? 1 : 0) || (b.score ?? -9) - (a.score ?? -9));
+    exploreResults = results;
+  } catch (e) {
+    toast('讀取失敗:' + (e.message || e));
+  }
+  exploreRunning = false; render();
 }
 
 // 從 IndexedDB 一次讀齊所有 bars

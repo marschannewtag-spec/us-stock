@@ -48,6 +48,25 @@ function stockScore(q) {
   return 0.5 * q.ret1m + 0.3 * q.ret3m + 0.2 * q.relMA20;
 }
 
+// ---- 候選驗證器 (需求延伸: AI/研究撒網 -> 引擎硬驗證) ----
+// 對任意代號(不在 universe、無板塊對映)只跑「個股層級」硬門檻,
+// 不含板塊輪動那兩關(那需要 universe 上下文)。回傳每關的通過與否。
+export function verifyCandidate(q, params = STRATEGY_PARAMS) {
+  const checks = [
+    { label: '站上 MA20', ok: q.price > q.ma20 },
+    { label: '站上 MA50', ok: q.price > q.ma50 },
+    { label: '1M/3M 動能同向為正', ok: q.ret1m > 0 && q.ret3m > 0 },
+    { label: `動能分數 ≥ ${params.minStockScore}`, ok: stockScore(q) >= params.minStockScore },
+    { label: `未過度延伸`, ok: !(params.maxExtensionAboveMA20 != null && q.relMA20 > params.maxExtensionAboveMA20) },
+  ];
+  const pass = checks.every((c) => c.ok);
+  const stopPrice = q.atr ? q.price - q.atr * params.atrStopMult : q.price * (1 + params.stopLossPct);
+  return {
+    pass, checks, score: stockScore(q),
+    entry: q.price, stopPrice, stopPct: (stopPrice - q.price) / q.price,
+  };
+}
+
 // ---- 產生今日買進清單 (需求 2/4) ----
 // 輸入:
 //   quotes         全標的快照

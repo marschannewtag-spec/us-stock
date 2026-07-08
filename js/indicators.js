@@ -22,3 +22,21 @@ export function atr(bars, period = 14) {
   }
   return a;
 }
+
+// 從 OHLC bars 算出一檔的完整指標(候選驗證器用;需 >=63 根,不足回 null)
+export function quoteMetrics(bars) {
+  if (!bars || bars.length < 63) return null;
+  const closes = bars.map((b) => b.c);
+  const last = closes[closes.length - 1];
+  const prev = closes[closes.length - 2] ?? last;
+  const ma = (k) => { const s = closes.slice(-k); return s.reduce((x, y) => x + y, 0) / s.length; };
+  const ret = (k) => { const p = closes[closes.length - 1 - k]; return p ? (last - p) / p : 0; };
+  const ma20 = ma(20), ma50 = ma(50);
+  const a = atr(bars, 14);
+  return {
+    price: last, prevClose: prev, ma20, ma50,
+    relMA20: (last - ma20) / ma20, relMA50: (last - ma50) / ma50,
+    ret1m: ret(21), ret3m: ret(63),
+    atr: a, atrPct: a ? a / last : null,
+  };
+}
