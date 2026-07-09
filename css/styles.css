@@ -244,6 +244,8 @@ body {
 .mc-table .mc-win td { color: var(--text); font-weight: 600; }
 
 /* ---- 候選驗證器 ---- */
+.quick-fill { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.btn.sm { padding: 6px 12px; font-size: 12px; }
 .cand-input { width: 100%; min-height: 72px; background: var(--surface); color: var(--text);
   border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; font-family: var(--mono);
   font-size: 14px; resize: vertical; margin-bottom: 12px; }

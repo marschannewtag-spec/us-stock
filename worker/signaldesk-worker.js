@@ -121,6 +121,34 @@ export default {
       return withCORS(json({ symbol: symbol.toUpperCase(), bars }), env);
     }
 
+    // ── 熱門漲幅榜(自動找熱門):代理 FMP stable gainers/actives/losers ──
+    if (url.pathname === '/movers') {
+      const type = (url.searchParams.get('type') || 'gainers');
+      // FMP 新版 stable 端點(舊 v3/gainers 已停用)
+      const stableMap = { gainers: 'biggest-gainers', losers: 'biggest-losers', actives: 'most-actives' };
+      const path = stableMap[type] || 'biggest-gainers';
+      if (!env.FMP_API_KEY) return withCORS(json({ error: 'Worker 未設定 FMP_API_KEY secret' }, 500), env);
+
+      const api = `https://financialmodelingprep.com/stable/${path}?apikey=${env.FMP_API_KEY}`;
+      let data;
+      try {
+        const r = await fetch(api, { cf: { cacheTtl: 600, cacheEverything: true } });
+        data = await r.json();
+      } catch (e) {
+        return withCORS(json({ error: 'fmp 抓取失敗', detail: String(e) }, 502), env);
+      }
+      if (!Array.isArray(data)) {
+        return withCORS(json({ movers: [], note: (data && (data['Error Message'] || data.message || data.Information)) || 'fmp 無資料' }), env);
+      }
+
+      const movers = data.map((v) => {
+        let pct = v.changesPercentage;
+        if (typeof pct === 'string') pct = parseFloat(pct.replace(/[%()]/g, ''));
+        return { symbol: v.symbol, name: v.name || v.symbol, price: v.price, changePct: (pct ?? 0) / 100 };
+      }).filter((m) => m.symbol);
+      return withCORS(json({ type: path, movers }), env);
+    }
+
     return withCORS(json({ error: 'not found' }, 404), env);
   },
 };

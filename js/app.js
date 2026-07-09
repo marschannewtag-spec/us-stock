@@ -425,10 +425,17 @@ function equitySVG(equity) {
 // ---- 探索:候選驗證器 ----
 function renderExplore() {
   const wl = getWatchlist();
+  const picksN = state.buys.length, holdN = portfolio.positions.length;
   return `
-    <h2 class="block-head">候選驗證器 <span class="head-note">貼清單 · 引擎硬門檻驗證</span></h2>
-    <div class="warn-box">從 ChatGPT / 你的研究拿到的候選股,貼進來(逗號或空白分隔)。SignalDesk 會抓<strong>真實資料</strong>、跑跟「今日」同一套硬門檻,告訴你誰<strong>現在真的夠強</strong>。AI 撒網、資料驗證——這是影片說的「AI 輔助、人驗證」。</div>
-    <textarea id="cand-input" class="cand-input" placeholder="例:PLTR, SMCI, VRT, ANET, CRWD">${escapeHtml(state.candInput || '')}</textarea>
+    <h2 class="block-head">候選驗證器 <span class="head-note">貼清單/貼文 · 引擎硬門檻驗證</span></h2>
+    <div class="warn-box">貼代號、<strong>或整段貼文文字</strong>都行——自動抓出 <strong>$代號 / #代號</strong>(例:貼「Micron #MU is testing…」會抓到 MU)。用真實資料跑跟「今日」同一套硬門檻。爬 FB 做不到,複製貼上一樣達成。</div>
+    <div class="quick-fill">
+      <button class="btn ghost sm" id="fill-picks">驗證今日精選${picksN ? ` (${picksN})` : ''}</button>
+      <button class="btn ghost sm" id="fill-holdings">驗證持倉${holdN ? ` (${holdN})` : ''}</button>
+      ${wl.length ? `<button class="btn ghost sm" id="fill-watch">驗證觀察名單 (${wl.length})</button>` : ''}
+    </div>
+    <button class="btn buy wide" id="fetch-movers" style="margin-bottom:12px">▶ 抓今日熱門漲幅榜 → 自動驗證前 12</button>
+    <textarea id="cand-input" class="cand-input" placeholder="貼代號或整段貼文,例:&#10;NVDA, AMZN, MU&#10;或「Micron #MU is testing its 50 day EMA…」">${escapeHtml(state.candInput || '')}</textarea>
     <button class="btn buy wide" id="verify-btn">▶ 驗證候選</button>
     ${wl.length ? `<div class="wl"><span class="wl-label">自訂觀察名單</span>${wl.map((s) => `<span class="wl-chip mono">${s}<button data-unwatch="${s}">×</button></span>`).join('')}</div>` : ''}
     ${exploreRunning ? `<div class="loading" style="padding:24px"><div class="spinner"></div><p class="load-msg">${exploreProgress}</p></div>` : ''}
@@ -442,7 +449,7 @@ function renderExploreResults() {
     ${exploreResults.map((r) => {
       if (r.insufficient) {
         return `<div class="card"><div class="card-main"><div class="ticker mono">${r.symbol}</div>
-          <div class="card-sub">資料不足或代號無效(Twelve Data 沒回足夠日線)</div></div></div>`;
+          <div class="card-sub">資料不足或代號無效</div></div></div>`;
       }
       const badge = r.pass ? `<span class="verdict pass">通過</span>` : `<span class="verdict fail">未通過</span>`;
       return `
@@ -545,8 +552,59 @@ function bindViewEvents() {
   if (runMc) runMc.onclick = () => runAllPresetsMC();
   const verifyBtn = document.getElementById('verify-btn');
   if (verifyBtn) verifyBtn.onclick = () => verifyCandidates();
+  const fillPicks = document.getElementById('fill-picks');
+  if (fillPicks) fillPicks.onclick = () => {
+    const t = state.buys.map((b) => b.symbol);
+    if (!t.length) { toast('今日沒有精選(空手或市場防禦)'); return; }
+    verifyCandidates(t);
+  };
+  const fillHold = document.getElementById('fill-holdings');
+  if (fillHold) fillHold.onclick = () => {
+    const t = portfolio.positions.map((p) => p.symbol);
+    if (!t.length) { toast('目前無持倉'); return; }
+    verifyCandidates(t);
+  };
+  const fillWatch = document.getElementById('fill-watch');
+  if (fillWatch) fillWatch.onclick = () => {
+    const t = getWatchlist();
+    if (!t.length) { toast('觀察名單是空的'); return; }
+    verifyCandidates(t);
+  };
   document.querySelectorAll('[data-watch]').forEach((el) => el.onclick = () => saveWatch(el.dataset.watch));
   document.querySelectorAll('[data-unwatch]').forEach((el) => el.onclick = () => removeWatch(el.dataset.unwatch));
+  const fetchMoversBtn = document.getElementById('fetch-movers');
+  if (fetchMoversBtn) fetchMoversBtn.onclick = async () => {
+    try {
+      toast('抓取今日熱門漲幅榜(FMP)…');
+      const movers = await fetchMovers('gainers');
+      if (!movers.length) { toast('沒抓到熱門(檢查 Worker 的 FMP_API_KEY)'); return; }
+      const clean = filterMovers(movers);
+      if (!clean.length) { toast(`抓到 ${movers.length} 檔,但都是水餃股/槓桿ETF,已全濾掉`); return; }
+      const top = clean.slice(0, 12).map((m) => m.symbol);
+      toast(`抓到 ${movers.length} 檔 → 濾掉垃圾剩 ${clean.length} → 驗證前 ${top.length}…`);
+      await verifyCandidates(top);
+    } catch (e) { toast('熱門榜失敗:' + (e.message || e)); }
+  };
+}
+
+// 抓 FMP 熱門漲幅榜(透過 Worker),回 [{symbol,name,price,changePct}]
+async function fetchMovers(type = 'gainers') {
+  const u = `${config.WORKER_URL.replace(/\/$/, '')}/movers?type=${type}`;
+  const r = await fetch(u);
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d.movers || [];
+}
+
+// 前置過濾:濾掉水餃股、槓桿/反向 ETF、SPAC/認股權/單位(留下像樣的正常股票)
+// 門檻可調:MIN_PRICE 是「像樣股價」下限。
+function filterMovers(movers, minPrice = 10) {
+  const JUNK = /(\b(2x|3x|daily|leverage|leveraged|direxion|proshares|granite|inverse|etf|etn|bull|bear)\b)|(\b(rights?|warrants?|units?)\b)|(acquisition corp)/i;
+  return movers.filter((m) =>
+    (m.price || 0) >= minPrice &&              // 去水餃股
+    !JUNK.test(m.name || '') &&                // 去槓桿/反向 ETF、SPAC、認股權
+    /^[A-Z]{1,5}$/.test(m.symbol || '')        // 只留正常股票代號
+  );
 }
 
 // 抓任意代號的日線(候選驗證器用),回 {SYM: bars[]}
@@ -572,12 +630,18 @@ async function fetchCandidates(tickers) {
   return barsBySym;
 }
 
-async function verifyCandidates() {
-  const el = document.getElementById('cand-input');
-  const raw = el ? el.value : '';
-  state.candInput = raw;
-  const tickers = [...new Set(raw.split(/[\s,;]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))].slice(0, 24);
-  if (!tickers.length) { toast('請先輸入代號'); return; }
+async function verifyCandidates(explicit) {
+  let tickers;
+  if (explicit && explicit.length) {
+    tickers = [...new Set(explicit.map((t) => t.toUpperCase()))].slice(0, 24);
+    state.candInput = tickers.join(', ');
+  } else {
+    const el = document.getElementById('cand-input');
+    const raw = el ? el.value : '';
+    state.candInput = raw;
+    tickers = extractTickers(raw).slice(0, 24);
+  }
+  if (!tickers.length) { toast('沒抓到代號(試試貼含 $XXX 或 #XXX 的文字)'); return; }
   if (!config.WORKER_URL) { toast('尚未設定 Worker 網址'); return; }
   exploreRunning = true; exploreResults = null; render();
   try {
@@ -594,6 +658,15 @@ async function verifyCandidates() {
     toast('讀取失敗:' + (e.message || e));
   }
   exploreRunning = false; render();
+}
+
+// 從任意貼文文字抽出股票代號:優先 $代號 / #代號;沒有才退回大寫詞(去雜訊)
+function extractTickers(text) {
+  const tagged = [...text.matchAll(/[$#]([A-Za-z]{1,5})\b/g)].map((m) => m[1].toUpperCase());
+  if (tagged.length) return [...new Set(tagged)];
+  const STOP = new Set(['A','I','THE','AND','OR','IS','IT','ITS','TO','OF','IN','ON','AT','FOR','DAY','EMA','SMA','MA','RSI','ATR','IPO','CEO','CFO','ETF','AI','USD','US','EU','UK','NEW','BUY','SELL','HOLD','LOG','PE','PB','EPS','YOY','QOQ','YTD','ATH','ATL','Q1','Q2','Q3','Q4','FY','GDP','CPI','FED','ROE','ROI']);
+  const toks = [...text.matchAll(/\b([A-Z]{1,5})\b/g)].map((m) => m[1]).filter((t) => !STOP.has(t));
+  return [...new Set(toks)];
 }
 
 // 從 IndexedDB 一次讀齊所有 bars
