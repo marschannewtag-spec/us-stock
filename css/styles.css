@@ -260,3 +260,7 @@ body {
 .wl-chip { font-size: 12px; background: var(--surface2); border: 1px solid var(--line);
   border-radius: 6px; padding: 3px 6px 3px 9px; display: inline-flex; align-items: center; gap: 4px; }
 .wl-chip button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 0 2px; }
+
+/* ---- 提示詞模版 ---- */
+.prompts { margin-bottom: 14px; }
+.prompt-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

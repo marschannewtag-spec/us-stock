@@ -62,6 +62,35 @@ export function verifyCandidate(q, params = STRATEGY_PARAMS) {
   return { pass, checks, score: stockScore(q), entry: q.price, stopPrice, stopPct: (stopPrice - q.price) / q.price };
 }
 
+// ---- Minervini 趨勢範本驗證(A/B/C 三概念做進引擎)----
+// A①/B 趨勢範本 + A③ 相對強度 + B 流動性 + A② VCP(附加指標)
+export function verifyTrendTemplate(q, market = {}, params = {}) {
+  const minPrice = params.minPrice ?? 20;
+  const minVol = params.minVol ?? 2000000;
+  const spyRet6m = market.spyRet6m ?? 0;
+  const checks = [
+    { label: '價 > MA50', ok: q.price > q.ma50 },
+    { label: '價 > MA200', ok: q.price > q.ma200 },
+    { label: 'MA50>MA150>MA200 多頭排列', ok: q.ma50 > q.ma150 && q.ma150 > q.ma200 },
+    { label: 'MA200 上升中', ok: q.ma200 > q.ma200_1mo },
+    { label: '距52週高 ≤25%', ok: q.pctFrom52wHigh >= -0.25 },
+    { label: '高於52週低 ≥30%', ok: q.pctAbove52wLow >= 0.30 },
+    { label: 'RS:6M 跑贏大盤', ok: q.ret6m > spyRet6m },
+    { label: `股價 ≥ $${minPrice}`, ok: q.price >= minPrice },
+    { label: `日均量 ≥ ${(minVol / 1e6).toFixed(0)}M`, ok: q.avgVol30 != null && q.avgVol30 >= minVol },
+  ];
+  const pass = checks.every((c) => c.ok);
+  const stopPrice = q.atr ? q.price - q.atr * (params.atrStopMult ?? 2.5) : q.price * (1 - 0.18);
+  return {
+    pass, checks,
+    score: stockScore(q),
+    vcp: !!q.vcpContracting,
+    rsVsSpy: q.ret6m - spyRet6m,
+    pctFrom52wHigh: q.pctFrom52wHigh,
+    entry: q.price, stopPrice, stopPct: (stopPrice - q.price) / q.price,
+  };
+}
+
 // ---- 產生今日買進清單 (需求 2/4) ----
 // 輸入:
 //   quotes         全標的快照

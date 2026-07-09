@@ -23,20 +23,42 @@ export function atr(bars, period = 14) {
   return a;
 }
 
-// 從 OHLC bars 算出一檔的完整指標(候選驗證器用;需 >=63 根,不足回 null)
+// 從 OHLC(V) bars 算出 Minervini 趨勢範本所需的完整指標。
+// 需 >=200 根(要算 MA200 / 52週高低);不足回 null。bars: {h,l,c,v}
 export function quoteMetrics(bars) {
-  if (!bars || bars.length < 63) return null;
+  if (!bars || bars.length < 200) return null;
   const closes = bars.map((b) => b.c);
-  const last = closes[closes.length - 1];
-  const prev = closes[closes.length - 2] ?? last;
-  const ma = (k) => { const s = closes.slice(-k); return s.reduce((x, y) => x + y, 0) / s.length; };
-  const ret = (k) => { const p = closes[closes.length - 1 - k]; return p ? (last - p) / p : 0; };
-  const ma20 = ma(20), ma50 = ma(50);
-  const a = atr(bars, 14);
+  const highs = bars.map((b) => b.h);
+  const lows = bars.map((b) => b.l);
+  const vols = bars.map((b) => b.v || 0);
+  const n = closes.length, last = closes[n - 1], prev = closes[n - 2] ?? last;
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const ma = (k) => mean(closes.slice(-Math.min(k, n)));
+  const ret = (k) => { const p = closes[n - 1 - k]; return p ? (last - p) / p : 0; };
+
+  const ma20 = ma(20), ma50 = ma(50), ma150 = ma(150), ma200 = ma(200);
+  // MA200 一個月前(判斷 MA200 是否上升)
+  const ma200_1mo = n >= 221 ? mean(closes.slice(n - 221, n - 21)) : ma200;
+
+  const win = Math.min(252, n);
+  const high52 = Math.max(...highs.slice(-win));
+  const low52 = Math.min(...lows.slice(-win));
+
+  const a = atr(bars, 14), atr10 = atr(bars, 10), atr50 = atr(bars, 50);
+  const hasVol = vols.some((v) => v > 0);
+  const vol10 = mean(vols.slice(-10)), vol50 = mean(vols.slice(-50)), avgVol30 = mean(vols.slice(-30));
+
   return {
-    price: last, prevClose: prev, ma20, ma50,
+    price: last, prevClose: prev,
+    ma20, ma50, ma150, ma200, ma200_1mo,
     relMA20: (last - ma20) / ma20, relMA50: (last - ma50) / ma50,
-    ret1m: ret(21), ret3m: ret(63),
+    ret1m: ret(21), ret3m: ret(63), ret6m: ret(126),
+    high52, low52,
+    pctFrom52wHigh: (last - high52) / high52,     // 負值 = 低於高點多少
+    pctAbove52wLow: (last - low52) / low52,
     atr: a, atrPct: a ? a / last : null,
+    avgVol30: hasVol ? avgVol30 : null,
+    // VCP 收縮啟發式:近期波動 + 量能雙雙萎縮
+    vcpContracting: (atr10 != null && atr50 != null && atr10 < atr50) && (hasVol ? vol10 < vol50 : true),
   };
 }

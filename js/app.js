@@ -8,7 +8,7 @@ import { MockDataAdapter, SECTORS, UNIVERSE } from './data.js';
 import { RealDataAdapter } from './data-real.js';
 import { config } from './config.js';
 import { rankSectors } from './sectors.js';
-import { generateBuys, generateSells, buyDiagnostic, computeStops, verifyCandidate, MAX_POSITIONS, STRATEGY_PARAMS } from './strategy.js';
+import { generateBuys, generateSells, buyDiagnostic, computeStops, verifyCandidate, verifyTrendTemplate, MAX_POSITIONS, STRATEGY_PARAMS } from './strategy.js';
 import { quoteMetrics } from './indicators.js';
 import { Portfolio } from './portfolio.js';
 import { computeMarketGate, MARKET_PARAMS } from './market.js';
@@ -427,8 +427,8 @@ function renderExplore() {
   const wl = getWatchlist();
   const picksN = state.buys.length, holdN = portfolio.positions.length;
   return `
-    <h2 class="block-head">候選驗證器 <span class="head-note">貼清單/貼文 · 引擎硬門檻驗證</span></h2>
-    <div class="warn-box">貼代號、<strong>或整段貼文文字</strong>都行——自動抓出 <strong>$代號 / #代號</strong>(例:貼「Micron #MU is testing…」會抓到 MU)。用真實資料跑跟「今日」同一套硬門檻。爬 FB 做不到,複製貼上一樣達成。</div>
+    <h2 class="block-head">候選驗證器 <span class="head-note">Minervini 趨勢範本 · 硬驗證</span></h2>
+    <div class="warn-box">貼代號、<strong>或整段貼文文字</strong>(自動抓 $代號/#代號),或用下方按鈕帶入。用真實資料跑完整 <strong>Minervini 趨勢範本</strong>:多頭排列(價>MA50>MA150>MA200)、距52週高≤25%、相對強度、流動性。這是嚴格的高標準篩,通過的才是 Stage 2 強勢股。</div>
     <div class="quick-fill">
       <button class="btn ghost sm" id="fill-picks">驗證今日精選${picksN ? ` (${picksN})` : ''}</button>
       <button class="btn ghost sm" id="fill-holdings">驗證持倉${holdN ? ` (${holdN})` : ''}</button>
@@ -448,14 +448,16 @@ function renderExploreResults() {
     ${exploreResults.map((r) => {
       if (r.insufficient) {
         return `<div class="card"><div class="card-main"><div class="ticker mono">${r.symbol}</div>
-          <div class="card-sub">資料不足或代號無效</div></div></div>`;
+          <div class="card-sub">資料不足(需 ≥200 日線算 MA200/52週高低)或代號無效</div></div></div>`;
       }
       const badge = r.pass ? `<span class="verdict pass">通過</span>` : `<span class="verdict fail">未通過</span>`;
+      const info = `<div class="levels mono muted">VCP ${r.vcp ? '收縮中 ✓' : '—'}　·　距52週高 ${pct(r.pctFrom52wHigh)}　·　RS ${pct(r.rsVsSpy)}</div>`;
       return `
         <div class="card ${r.pass ? '' : 'dim'}">
           <div class="card-main">
             <div class="ticker mono">${r.symbol} ${badge}</div>
             <div class="reasons">${r.checks.map((c) => `<span class="tag ${c.ok ? 'okc' : 'nok'}">${c.ok ? '✓' : '✗'} ${c.label}</span>`).join('')}</div>
+            ${info}
             ${r.pass ? `<div class="levels mono">進場 約$${r.entry.toFixed(2)}　·　停損 $${r.stopPrice.toFixed(2)} (${pct(r.stopPct)})</div>` : ''}
           </div>
           <div class="card-side">
@@ -621,7 +623,7 @@ async function fetchCandidates(tickers) {
       const node = d[s] || d[s.toUpperCase()];
       const values = (node && node.values) || [];
       barsBySym[s] = values
-        .map((v) => ({ h: parseFloat(v.high), l: parseFloat(v.low), c: parseFloat(v.close) }))
+        .map((v) => ({ h: parseFloat(v.high), l: parseFloat(v.low), c: parseFloat(v.close), v: parseFloat(v.volume) }))
         .filter((b) => !isNaN(b.c) && !isNaN(b.h) && !isNaN(b.l));
     }
     if (i + BATCH < tickers.length && GAP > 0) { exploreProgress = '等待額度重置…'; render(); await sleep(GAP); }
@@ -644,11 +646,19 @@ async function verifyCandidates(explicit) {
   if (!config.WORKER_URL) { toast('尚未設定 Worker 網址'); return; }
   exploreRunning = true; exploreResults = null; render();
   try {
+    // 取 SPY 6 個月報酬,供相對強度(RS)比較
+    let spyRet6m = 0;
+    try {
+      const mkt = await adapter.getMarketSeries();
+      const spy = mkt.spy || [];
+      if (spy.length > 126) spyRet6m = (spy[spy.length - 1] - spy[spy.length - 1 - 126]) / spy[spy.length - 1 - 126];
+    } catch (e) { /* 無 SPY 時 RS 用 0 基準 */ }
+
     const bars = await fetchCandidates(tickers);
     const results = tickers.map((t) => {
       const m = quoteMetrics(bars[t]);
       if (!m) return { symbol: t, insufficient: true };
-      const v = verifyCandidate({ symbol: t, ...m }, DP);
+      const v = verifyTrendTemplate({ symbol: t, ...m }, { spyRet6m }, DP);
       return { symbol: t, price: m.price, ...v };
     });
     results.sort((a, b) => (b.pass ? 1 : 0) - (a.pass ? 1 : 0) || (b.score ?? -9) - (a.score ?? -9));
