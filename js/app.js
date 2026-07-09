@@ -432,12 +432,11 @@ function renderExplore() {
     <div class="quick-fill">
       <button class="btn ghost sm" id="fill-picks">驗證今日精選${picksN ? ` (${picksN})` : ''}</button>
       <button class="btn ghost sm" id="fill-holdings">驗證持倉${holdN ? ` (${holdN})` : ''}</button>
-      ${wl.length ? `<button class="btn ghost sm" id="fill-watch">驗證觀察名單 (${wl.length})</button>` : ''}
     </div>
     <button class="btn buy wide" id="fetch-movers" style="margin-bottom:12px">▶ 抓今日熱門漲幅榜 → 自動驗證前 12</button>
     <textarea id="cand-input" class="cand-input" placeholder="貼代號或整段貼文,例:&#10;NVDA, AMZN, MU&#10;或「Micron #MU is testing its 50 day EMA…」">${escapeHtml(state.candInput || '')}</textarea>
     <button class="btn buy wide" id="verify-btn">▶ 驗證候選</button>
-    ${wl.length ? `<div class="wl"><span class="wl-label">自訂觀察名單</span>${wl.map((s) => `<span class="wl-chip mono">${s}<button data-unwatch="${s}">×</button></span>`).join('')}</div>` : ''}
+    ${wl.length ? `<div class="wl"><span class="wl-label">自訂觀察名單</span>${wl.map((s) => `<span class="wl-chip mono">${s}<button data-unwatch="${s}">×</button></span>`).join('')}<button class="btn ghost sm" id="reverify-watch" style="margin-left:auto">↻ 全部重驗 (${wl.length})</button></div>` : ''}
     ${exploreRunning ? `<div class="loading" style="padding:24px"><div class="spinner"></div><p class="load-msg">${exploreProgress}</p></div>` : ''}
     ${exploreResults ? renderExploreResults() : ''}`;
 }
@@ -564,7 +563,7 @@ function bindViewEvents() {
     if (!t.length) { toast('目前無持倉'); return; }
     verifyCandidates(t);
   };
-  const fillWatch = document.getElementById('fill-watch');
+  const fillWatch = document.getElementById('reverify-watch');
   if (fillWatch) fillWatch.onclick = () => {
     const t = getWatchlist();
     if (!t.length) { toast('觀察名單是空的'); return; }
