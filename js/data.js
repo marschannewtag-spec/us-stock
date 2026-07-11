@@ -29,65 +29,122 @@ export const SECTORS = [
   { etf: 'XLC', name: '通訊 Communication' },
 ];
 
-// ---- 股票池: 各板塊代表性大型權值股 (流動性高，方便起步) ----
-// 之後你可以改成「抓該板塊 ETF 的前 N 大成分股」自動產生。
+// ---- 股票池: ~100 檔跨 11 板塊大型權值股(涵蓋所有板塊,供輪動用)----
+// 執行時會依 config 的 PRICE_MIN / PRICE_MAX 價格帶過濾(目前 $10~$600)。
 export const UNIVERSE = [
-  // XLK
+  // XLK 科技 (14)
   { symbol: 'AAPL', name: 'Apple', etf: 'XLK' },
   { symbol: 'MSFT', name: 'Microsoft', etf: 'XLK' },
   { symbol: 'NVDA', name: 'Nvidia', etf: 'XLK' },
   { symbol: 'AVGO', name: 'Broadcom', etf: 'XLK' },
   { symbol: 'AMD', name: 'AMD', etf: 'XLK' },
   { symbol: 'CRM', name: 'Salesforce', etf: 'XLK' },
-  // XLF
+  { symbol: 'ORCL', name: 'Oracle', etf: 'XLK' },
+  { symbol: 'ADBE', name: 'Adobe', etf: 'XLK' },
+  { symbol: 'CSCO', name: 'Cisco', etf: 'XLK' },
+  { symbol: 'QCOM', name: 'Qualcomm', etf: 'XLK' },
+  { symbol: 'TXN', name: 'Texas Instruments', etf: 'XLK' },
+  { symbol: 'NOW', name: 'ServiceNow', etf: 'XLK' },
+  { symbol: 'AMAT', name: 'Applied Materials', etf: 'XLK' },
+  { symbol: 'MU', name: 'Micron', etf: 'XLK' },
+  // XLF 金融 (10)
   { symbol: 'JPM', name: 'JPMorgan', etf: 'XLF' },
   { symbol: 'BAC', name: 'Bank of America', etf: 'XLF' },
+  { symbol: 'WFC', name: 'Wells Fargo', etf: 'XLF' },
   { symbol: 'GS', name: 'Goldman Sachs', etf: 'XLF' },
-  { symbol: 'V', name: 'Visa', etf: 'XLF' },
-  { symbol: 'MA', name: 'Mastercard', etf: 'XLF' },
-  // XLE
+  { symbol: 'MS', name: 'Morgan Stanley', etf: 'XLF' },
+  { symbol: 'C', name: 'Citigroup', etf: 'XLF' },
+  { symbol: 'SCHW', name: 'Charles Schwab', etf: 'XLF' },
+  { symbol: 'AXP', name: 'American Express', etf: 'XLF' },
+  { symbol: 'BLK', name: 'BlackRock', etf: 'XLF' },
+  { symbol: 'SPGI', name: 'S&P Global', etf: 'XLF' },
+  // XLE 能源 (8)
   { symbol: 'XOM', name: 'Exxon Mobil', etf: 'XLE' },
   { symbol: 'CVX', name: 'Chevron', etf: 'XLE' },
   { symbol: 'COP', name: 'ConocoPhillips', etf: 'XLE' },
   { symbol: 'SLB', name: 'Schlumberger', etf: 'XLE' },
-  // XLV
+  { symbol: 'EOG', name: 'EOG Resources', etf: 'XLE' },
+  { symbol: 'MPC', name: 'Marathon Petroleum', etf: 'XLE' },
+  { symbol: 'PSX', name: 'Phillips 66', etf: 'XLE' },
+  { symbol: 'OKE', name: 'ONEOK', etf: 'XLE' },
+  // XLV 醫療 (11)
   { symbol: 'LLY', name: 'Eli Lilly', etf: 'XLV' },
   { symbol: 'UNH', name: 'UnitedHealth', etf: 'XLV' },
   { symbol: 'JNJ', name: 'Johnson & Johnson', etf: 'XLV' },
   { symbol: 'MRK', name: 'Merck', etf: 'XLV' },
-  // XLY
+  { symbol: 'ABBV', name: 'AbbVie', etf: 'XLV' },
+  { symbol: 'TMO', name: 'Thermo Fisher', etf: 'XLV' },
+  { symbol: 'ABT', name: 'Abbott', etf: 'XLV' },
+  { symbol: 'PFE', name: 'Pfizer', etf: 'XLV' },
+  { symbol: 'DHR', name: 'Danaher', etf: 'XLV' },
+  { symbol: 'AMGN', name: 'Amgen', etf: 'XLV' },
+  { symbol: 'ISRG', name: 'Intuitive Surgical', etf: 'XLV' },
+  // XLY 非必需消費 (9)
   { symbol: 'AMZN', name: 'Amazon', etf: 'XLY' },
   { symbol: 'TSLA', name: 'Tesla', etf: 'XLY' },
   { symbol: 'HD', name: 'Home Depot', etf: 'XLY' },
   { symbol: 'MCD', name: 'McDonald\u2019s', etf: 'XLY' },
-  // XLP
+  { symbol: 'NKE', name: 'Nike', etf: 'XLY' },
+  { symbol: 'LOW', name: 'Lowe\u2019s', etf: 'XLY' },
+  { symbol: 'SBUX', name: 'Starbucks', etf: 'XLY' },
+  { symbol: 'TJX', name: 'TJX Companies', etf: 'XLY' },
+  { symbol: 'MAR', name: 'Marriott', etf: 'XLY' },
+  // XLP 必需消費 (8)
   { symbol: 'PG', name: 'Procter & Gamble', etf: 'XLP' },
   { symbol: 'KO', name: 'Coca-Cola', etf: 'XLP' },
+  { symbol: 'PEP', name: 'PepsiCo', etf: 'XLP' },
   { symbol: 'COST', name: 'Costco', etf: 'XLP' },
   { symbol: 'WMT', name: 'Walmart', etf: 'XLP' },
-  // XLI
+  { symbol: 'PM', name: 'Philip Morris', etf: 'XLP' },
+  { symbol: 'MDLZ', name: 'Mondelez', etf: 'XLP' },
+  { symbol: 'CL', name: 'Colgate-Palmolive', etf: 'XLP' },
+  // XLI 工業 (10)
   { symbol: 'CAT', name: 'Caterpillar', etf: 'XLI' },
   { symbol: 'GE', name: 'GE Aerospace', etf: 'XLI' },
   { symbol: 'BA', name: 'Boeing', etf: 'XLI' },
   { symbol: 'UBER', name: 'Uber', etf: 'XLI' },
-  // XLB
+  { symbol: 'HON', name: 'Honeywell', etf: 'XLI' },
+  { symbol: 'UNP', name: 'Union Pacific', etf: 'XLI' },
+  { symbol: 'RTX', name: 'RTX', etf: 'XLI' },
+  { symbol: 'DE', name: 'Deere', etf: 'XLI' },
+  { symbol: 'LMT', name: 'Lockheed Martin', etf: 'XLI' },
+  { symbol: 'UPS', name: 'UPS', etf: 'XLI' },
+  // XLB 原物料 (8)
   { symbol: 'LIN', name: 'Linde', etf: 'XLB' },
   { symbol: 'FCX', name: 'Freeport-McMoRan', etf: 'XLB' },
   { symbol: 'NEM', name: 'Newmont', etf: 'XLB' },
-  // XLRE
+  { symbol: 'APD', name: 'Air Products', etf: 'XLB' },
+  { symbol: 'SHW', name: 'Sherwin-Williams', etf: 'XLB' },
+  { symbol: 'ECL', name: 'Ecolab', etf: 'XLB' },
+  { symbol: 'NUE', name: 'Nucor', etf: 'XLB' },
+  { symbol: 'DOW', name: 'Dow', etf: 'XLB' },
+  // XLRE 不動產 (7)
   { symbol: 'PLD', name: 'Prologis', etf: 'XLRE' },
   { symbol: 'AMT', name: 'American Tower', etf: 'XLRE' },
   { symbol: 'O', name: 'Realty Income', etf: 'XLRE' },
-  // XLU
+  { symbol: 'EQIX', name: 'Equinix', etf: 'XLRE' },
+  { symbol: 'SPG', name: 'Simon Property', etf: 'XLRE' },
+  { symbol: 'PSA', name: 'Public Storage', etf: 'XLRE' },
+  { symbol: 'CCI', name: 'Crown Castle', etf: 'XLRE' },
+  // XLU 公用事業 (7)
   { symbol: 'NEE', name: 'NextEra Energy', etf: 'XLU' },
   { symbol: 'SO', name: 'Southern Co', etf: 'XLU' },
   { symbol: 'DUK', name: 'Duke Energy', etf: 'XLU' },
-  // XLC
+  { symbol: 'D', name: 'Dominion Energy', etf: 'XLU' },
+  { symbol: 'AEP', name: 'American Electric Power', etf: 'XLU' },
+  { symbol: 'EXC', name: 'Exelon', etf: 'XLU' },
+  { symbol: 'SRE', name: 'Sempra', etf: 'XLU' },
+  // XLC 通訊 (8)
   { symbol: 'GOOGL', name: 'Alphabet', etf: 'XLC' },
   { symbol: 'META', name: 'Meta', etf: 'XLC' },
   { symbol: 'NFLX', name: 'Netflix', etf: 'XLC' },
   { symbol: 'DIS', name: 'Disney', etf: 'XLC' },
+  { symbol: 'CMCSA', name: 'Comcast', etf: 'XLC' },
+  { symbol: 'TMUS', name: 'T-Mobile', etf: 'XLC' },
+  { symbol: 'T', name: 'AT&T', etf: 'XLC' },
+  { symbol: 'VZ', name: 'Verizon', etf: 'XLC' },
 ];
+
 
 // -------------------------------------------------------------
 // 可重現的亂數 (mulberry32) — 同一個 seed 永遠產生同一組資料，

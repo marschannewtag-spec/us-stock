@@ -47,15 +47,21 @@ async function compute() {
   // 不重複:算出還在冷卻期(近 N 天賣掉)的代號,買進時排除
   const recentlySold = recentlySoldSymbols(DP.reentryCooldownDays);
 
-  state.buys = generateBuys(state.quotes, state.ranked, portfolio.positions, DP, recentlySold);
+  state.buys = generateBuys(tradeable(state.quotes), state.ranked, portfolio.positions, DP, recentlySold);
   state.sells = generateSells(portfolio.positions, state.quotes, state.ranked, DP);
 
   // 若今天沒補滿,算一下「差在哪」給使用者看(證明是門檻在把關)
-  state.buyDiag = buyDiagnostic(state.quotes, state.ranked, portfolio.positions, DP, recentlySold);
+  state.buyDiag = buyDiagnostic(tradeable(state.quotes), state.ranked, portfolio.positions, DP, recentlySold);
 
   // AI 水位:市場層級總開關(防禦時暫停進場)
   const mkt = await adapter.getMarketSeries();
   state.market = computeMarketGate(mkt.spy, mkt.vix, DM);
+}
+
+// 只保留價格帶內的股票(config.PRICE_MIN ~ PRICE_MAX,下單/部位大小限制)
+function tradeable(quotes) {
+  const lo = config.PRICE_MIN ?? 0, hi = config.PRICE_MAX ?? Infinity;
+  return quotes.filter((q) => q.price >= lo && q.price <= hi);
 }
 
 // 從已實現紀錄找出近 N 天賣出的代號(冷卻期,避免買→賣→馬上再買的來回洗)
@@ -451,7 +457,8 @@ function renderExploreResults() {
           <div class="card-sub">資料不足(需 ≥200 日線算 MA200/52週高低)或代號無效</div></div></div>`;
       }
       const badge = r.pass ? `<span class="verdict pass">通過</span>` : `<span class="verdict fail">未通過</span>`;
-      const info = `<div class="levels mono muted">VCP ${r.vcp ? '收縮中 ✓' : '—'}　·　距52週高 ${pct(r.pctFrom52wHigh)}　·　RS ${pct(r.rsVsSpy)}</div>`;
+      const mc = r.marketCap != null ? `　·　市值 $${(r.marketCap / 1e9).toFixed(1)}B` : '';
+      const info = `<div class="levels mono muted">VCP ${r.vcp ? '收縮中 ✓' : '—'}　·　距52週高 ${pct(r.pctFrom52wHigh)}　·　RS ${pct(r.rsVsSpy)}${mc}</div>`;
       return `
         <div class="card ${r.pass ? '' : 'dim'}">
           <div class="card-main">
@@ -588,6 +595,16 @@ function bindViewEvents() {
   };
 }
 
+// 抓 FMP 市值(透過 Worker),回 {SYM: marketCap}
+async function fetchMarketCaps(tickers) {
+  try {
+    const u = `${config.WORKER_URL.replace(/\/$/, '')}/marketcap?symbols=${encodeURIComponent(tickers.join(','))}`;
+    const r = await fetch(u);
+    const d = await r.json();
+    return d.marketCaps || {};
+  } catch (e) { return {}; }
+}
+
 // 抓 FMP 熱門漲幅榜(透過 Worker),回 [{symbol,name,price,changePct}]
 async function fetchMovers(type = 'gainers') {
   const u = `${config.WORKER_URL.replace(/\/$/, '')}/movers?type=${type}`;
@@ -655,10 +672,11 @@ async function verifyCandidates(explicit) {
     } catch (e) { /* 無 SPY 時 RS 用 0 基準 */ }
 
     const bars = await fetchCandidates(tickers);
+    const caps = await fetchMarketCaps(tickers);   // FMP 免費市值
     const results = tickers.map((t) => {
       const m = quoteMetrics(bars[t]);
       if (!m) return { symbol: t, insufficient: true };
-      const v = verifyTrendTemplate({ symbol: t, ...m }, { spyRet6m }, DP);
+      const v = verifyTrendTemplate({ symbol: t, ...m, marketCap: caps[t] }, { spyRet6m }, DP);
       return { symbol: t, price: m.price, ...v };
     });
     results.sort((a, b) => (b.pass ? 1 : 0) - (a.pass ? 1 : 0) || (b.score ?? -9) - (a.score ?? -9));

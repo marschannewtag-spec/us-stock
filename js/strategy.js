@@ -76,8 +76,9 @@ export function verifyTrendTemplate(q, market = {}, params = {}) {
     { label: '距52週高 ≤25%', ok: q.pctFrom52wHigh >= -0.25 },
     { label: '高於52週低 ≥30%', ok: q.pctAbove52wLow >= 0.30 },
     { label: 'RS:6M 跑贏大盤', ok: q.ret6m > spyRet6m },
-    { label: `股價 ≥ $${minPrice}`, ok: q.price >= minPrice },
+    { label: '股價 ≥ $' + minPrice, ok: q.price >= minPrice },
     { label: `日均量 ≥ ${(minVol / 1e6).toFixed(0)}M`, ok: q.avgVol30 != null && q.avgVol30 >= minVol },
+    { label: '市值 ≥ $2B', ok: q.marketCap == null ? true : q.marketCap >= 2e9 },
   ];
   const pass = checks.every((c) => c.ok);
   const stopPrice = q.atr ? q.price - q.atr * (params.atrStopMult ?? 2.5) : q.price * (1 - 0.18);
@@ -87,6 +88,7 @@ export function verifyTrendTemplate(q, market = {}, params = {}) {
     vcp: !!q.vcpContracting,
     rsVsSpy: q.ret6m - spyRet6m,
     pctFrom52wHigh: q.pctFrom52wHigh,
+    marketCap: q.marketCap ?? null,
     entry: q.price, stopPrice, stopPct: (stopPrice - q.price) / q.price,
   };
 }

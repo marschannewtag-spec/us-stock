@@ -149,6 +149,27 @@ export default {
       return withCORS(json({ type: path, movers }), env);
     }
 
+    // ── 市值(補完 Minervini「市值>$20億」那關):FMP profile,免費 ──
+    if (url.pathname === '/marketcap') {
+      const list = (url.searchParams.get('symbols') || '').split(',')
+        .map((s) => s.trim().toUpperCase()).filter(Boolean).slice(0, 25);
+      if (!list.length) return withCORS(json({ error: 'symbols 必填' }, 400), env);
+      if (!env.FMP_API_KEY) return withCORS(json({ error: 'Worker 未設定 FMP_API_KEY secret' }, 500), env);
+
+      const out = {};
+      await Promise.all(list.map(async (sym) => {
+        try {
+          const r = await fetch(
+            `https://financialmodelingprep.com/stable/profile?symbol=${encodeURIComponent(sym)}&apikey=${env.FMP_API_KEY}`,
+            { cf: { cacheTtl: 86400, cacheEverything: true } });
+          const d = await r.json();
+          const rec = Array.isArray(d) ? d[0] : d;
+          out[sym] = rec ? (rec.marketCap ?? rec.mktCap ?? null) : null;
+        } catch (e) { out[sym] = null; }
+      }));
+      return withCORS(json({ marketCaps: out }), env);
+    }
+
     return withCORS(json({ error: 'not found' }, 404), env);
   },
 };
