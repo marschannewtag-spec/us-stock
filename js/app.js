@@ -15,7 +15,6 @@ import { computeMarketGate, MARKET_PARAMS } from './market.js';
 import { putBars, getBars, putMeta, getMeta, clearAll } from './histdb.js';
 import { runRealBacktest } from './backtest-real.js';
 import { PRESETS, PRESET_ORDER } from './presets.js';
-import { runBacktest } from './backtest.js';
 
 // 依 config 選資料來源:真實(Twelve Data / Worker)或模擬
 const adapter = config.USE_REAL_DATA ? new RealDataAdapter(config) : new MockDataAdapter();
@@ -254,7 +253,6 @@ function renderSectors() {
     </div>`;
 }
 
-let backtestResult = null;
 let realBtResult = null;  // 真實 16 年回測(綜合)
 let realBtRunning = false;
 let mcRunning = false;    // 六姿態 Monte Carlo
@@ -541,11 +539,6 @@ function bindViewEvents() {
       }
       await compute(); render();
     });
-  const runBt = document.getElementById('run-bt');
-  if (runBt) runBt.onclick = async () => {
-    runBt.disabled = true; runBt.textContent = '回測中…';
-    backtestResult = await buildAndRunBacktest(); render();
-  };
   const loadHist = document.getElementById('load-hist');
   if (loadHist) loadHist.onclick = () => loadHistory();
   const reloadHist = document.getElementById('reload-hist');
@@ -812,19 +805,6 @@ async function buildSpySanity() {
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-// 用 adapter 的歷史資料組 priceMatrix 給回測引擎 (之後換真實資料即可)
-async function buildAndRunBacktest() {
-  const days = 252 * 3; // 3 年
-  const priceMatrix = {};
-  // 為了有足夠長度，臨時用一個新的模擬器產生較長的歷史
-  const sim = new MockDataAdapter(987654);
-  for (let i = 0; i < days; i++) sim.advanceDay();
-  for (const u of UNIVERSE) priceMatrix[u.symbol] = await sim.getHistorical(u.symbol, days);
-  const dates = Array.from({ length: priceMatrix[UNIVERSE[0].symbol].length },
-    (_, i) => `D${i}`);
-  return runBacktest({ priceMatrix, dates });
-}
 
 // 簡易 toast
 let toastTimer;
