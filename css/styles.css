@@ -264,3 +264,7 @@ body {
 /* ---- 提示詞模版 ---- */
 .prompts { margin-bottom: 14px; }
 .prompt-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* ---- 交易紀錄:市場環境戳記 ---- */
+.trade-env { display: block; font-size: 11px; color: var(--heat); margin-top: 3px;
+  opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -39,7 +39,7 @@ export class Portfolio {
   has(symbol) { return this.positions.some((p) => p.symbol === symbol); }
 
   // 買進。需求 1: 滿 6 倉或已持有 -> 拒絕。
-  buy({ symbol, name, etf, price, shares = 1, stopPrice = null, atr = null }) {
+  buy({ symbol, name, etf, price, shares = 1, stopPrice = null, atr = null, entryEnv = null }) {
     if (this.isFull()) return { ok: false, msg: '已達 6 倉上限' };
     if (this.has(symbol)) return { ok: false, msg: '已持有此標的' };
     this.positions.push({
@@ -47,6 +47,7 @@ export class Portfolio {
       entryPrice: price, peakPrice: price,
       stopPrice, atr,                                  // 進場時鎖定的 ATR 停損價
       size: 1, laddersFired: [],                       // 分批停利:剩餘比例 + 已觸發的階
+      entryEnv,                                         // 進場時的市場環境戳記(Minervini 心法)
       entryDate: new Date().toISOString().slice(0, 10),
     });
     this.save();
@@ -55,7 +56,7 @@ export class Portfolio {
 
   // 賣出。fraction = 要賣掉的「原始部位比例」(1 = 全平)。
   // ladderIdx 有值代表這是階梯停利觸發,記下來避免同一階重複觸發。
-  sellPartial(symbol, price, fraction = 1, reason = '手動平倉', ladderIdx = null) {
+  sellPartial(symbol, price, fraction = 1, reason = '手動平倉', ladderIdx = null, exitEnv = null) {
     const i = this.positions.findIndex((p) => p.symbol === symbol);
     if (i < 0) return { ok: false, msg: '未持有' };
     const pos = this.positions[i];
@@ -69,6 +70,7 @@ export class Portfolio {
     this.cashLog.push({
       symbol, name: pos.name, entryPrice: pos.entryPrice, exitPrice: price, pnlPct,
       fraction: sellSize, partial,
+      entryEnv: pos.entryEnv ?? null, exitEnv,         // 市場環境戳記(進場/出場)
       entryDate: pos.entryDate, exitDate, holdingDays, reason,
     });
 
@@ -80,8 +82,8 @@ export class Portfolio {
   }
 
   // 全平(手動平倉 / 停損等):賣掉剩餘全部
-  sell(symbol, price, reason = '手動平倉') {
-    return this.sellPartial(symbol, price, 1, reason);
+  sell(symbol, price, reason = '手動平倉', exitEnv = null) {
+    return this.sellPartial(symbol, price, 1, reason, null, exitEnv);
   }
 
   // 績效統計 + 資金成長曲線(百分比複利,起點 100)

@@ -42,6 +42,7 @@ async function compute() {
   state.quotes = await adapter.getQuotes();
   portfolio.mark(state.quotes);
   state.ranked = rankSectors(await adapter.getSectorETFs(), DP.hotSectorCount);
+  logSectorLeader(state.ranked[0] ? state.ranked[0].etf : null);
 
   // 不重複:算出還在冷卻期(近 N 天賣掉)的代號,買進時排除
   const recentlySold = recentlySoldSymbols(DP.reentryCooldownDays);
@@ -292,6 +293,49 @@ function renderPerf() {
   `;
 }
 
+// ---- 市場環境戳記(Minervini 心法:記錄「這筆交易是在什麼市場環境下做的」)----
+function currentMarketEnv() {
+  const m = state.market || {};
+  const water = !m.available ? 'NA' : (m.riskOn ? 'ON' : 'DEF');
+  const top = state.ranked && state.ranked[0];
+  return {
+    water,
+    top: top ? top.etf : null,
+    topName: top ? top.name : null,
+    rot: rotationInfo(),
+  };
+}
+
+// 每日記錄「當天最強板塊」,供輪動速度計算
+function logSectorLeader(etf) {
+  if (!etf) return;
+  const today = new Date().toISOString().slice(0, 10);
+  let log;
+  try { log = JSON.parse(localStorage.getItem('sd_sector_log') || '[]'); } catch (e) { log = []; }
+  if (log.length && log[log.length - 1].date === today) log[log.length - 1].etf = etf;
+  else log.push({ date: today, etf });
+  if (log.length > 15) log = log.slice(-15);
+  try { localStorage.setItem('sd_sector_log', JSON.stringify(log)); } catch (e) { /* ignore */ }
+}
+
+// 輪動速度:近 5 個記錄日裡,板塊龍頭出現過幾種(換得越多 = 越像沒主線的震盪盤)
+function rotationInfo() {
+  let log;
+  try { log = JSON.parse(localStorage.getItem('sd_sector_log') || '[]'); } catch (e) { return null; }
+  const recent = log.slice(-5);
+  if (recent.length < 3) return null; // 資料還不夠
+  return { distinct: new Set(recent.map((x) => x.etf)).size, window: recent.length };
+}
+
+const WATER_LABEL = { ON: '進場許可', DEF: '防禦', NA: '—' };
+function envStamp(env) {
+  if (!env) return '';
+  const parts = [`環境:${WATER_LABEL[env.water] || '—'}`];
+  if (env.topName) parts.push(`龍頭 ${env.topName}`);
+  if (env.rot) parts.push(`輪動 ${env.rot.distinct}/${env.rot.window}`);
+  return `<span class="trade-env">${parts.join('　·　')}</span>`;
+}
+
 function tradeRow(c) {
   const win = c.pnlPct >= 0;
   return `
@@ -300,6 +344,7 @@ function tradeRow(c) {
         <span class="ticker mono">${c.symbol}</span>
         <span class="trade-sub mono">$${c.entryPrice.toFixed(2)} → $${c.exitPrice.toFixed(2)}</span>
         <span class="trade-meta">${c.partial ? `減碼 ${Math.round((c.fraction ?? 1) * 100)}% · ` : ''}${c.reason || ''} · 持有 ${c.holdingDays ?? '?'} 天 · ${c.exitDate}</span>
+        ${envStamp(c.entryEnv)}
       </div>
       <div class="trade-pnl mono ${cls(c.pnlPct)}">${pct(c.pnlPct)}</div>
     </div>`;
@@ -518,7 +563,7 @@ function bindViewEvents() {
       const stopPrice = q.atr
         ? q.price - q.atr * DP.atrStopMult
         : q.price * (1 + DP.stopLossPct);
-      const r = portfolio.buy({ symbol: q.symbol, name: q.name, etf: q.etf, price: q.price, stopPrice, atr: q.atr });
+      const r = portfolio.buy({ symbol: q.symbol, name: q.name, etf: q.etf, price: q.price, stopPrice, atr: q.atr, entryEnv: currentMarketEnv() });
       if (!r.ok) toast(r.msg); else toast(`已買進 ${q.symbol}`);
       await compute(); render();
     });
@@ -526,15 +571,16 @@ function bindViewEvents() {
     el.onclick = async () => {
       const q = state.quotes.find((x) => x.symbol === el.dataset.sell);
       const sig = state.sells.find((x) => x.symbol === el.dataset.sell);
+      const env = currentMarketEnv();
       let r;
       if (sig && sig.fraction != null && sig.fraction < 1) {
         // 階梯停利:部分減碼
-        r = portfolio.sellPartial(el.dataset.sell, q.price, sig.fraction, sig.reasons.join(' / '), sig.ladderIdx);
+        r = portfolio.sellPartial(el.dataset.sell, q.price, sig.fraction, sig.reasons.join(' / '), sig.ladderIdx, env);
         if (r.ok) toast(`已減碼 ${el.dataset.sell} ${(sig.fraction * 100).toFixed(0)}% (${pct(r.pnlPct)})`);
       } else {
         // 全平(停損/破線/手動)
         const reason = sig ? sig.reasons.join(' / ') : '手動平倉';
-        r = portfolio.sell(el.dataset.sell, q.price, reason);
+        r = portfolio.sell(el.dataset.sell, q.price, reason, env);
         if (r.ok) toast(`已平倉 ${el.dataset.sell} (${pct(r.pnlPct)})`);
       }
       await compute(); render();
