@@ -5,7 +5,7 @@
 // =============================================================
 
 import { MockDataAdapter, SECTORS, UNIVERSE } from './data.js';
-import { RealDataAdapter } from './data-real.js';
+import { RealDataAdapter, addExtraSymbol, removeExtraSymbol, getExtras } from './data-real.js';
 import { config } from './config.js';
 import { rankSectors } from './sectors.js';
 import { generateBuys, generateSells, buyDiagnostic, computeStops, verifyCandidate, verifyTrendTemplate, MAX_POSITIONS, STRATEGY_PARAMS } from './strategy.js';
@@ -36,6 +36,7 @@ let state = {
 let exploreRunning = false;
 let exploreProgress = '';
 let exploreResults = null;
+let exploreBars = {};      // 探索最近一次抓到的日線(買進時 seed 給 adapter 用)
 
 // ---- 每天重新計算: 報價 -> 板塊排名 -> 買賣訊號 ----
 async function compute() {
@@ -43,6 +44,7 @@ async function compute() {
   portfolio.mark(state.quotes);
   state.ranked = rankSectors(await adapter.getSectorETFs(), DP.hotSectorCount);
   logSectorLeader(state.ranked[0] ? state.ranked[0].etf : null);
+  pruneExtras();
 
   // 不重複:算出還在冷卻期(近 N 天賣掉)的代號,買進時排除
   const recentlySold = recentlySoldSymbols(DP.reentryCooldownDays);
@@ -197,8 +199,12 @@ function sellCard(s) {
 }
 
 function renderPortfolio() {
+  const hasData = portfolio.positions.length > 0 || portfolio.cashLog.length > 0;
+  const clearBtn = hasData
+    ? `<button class="btn ghost wide" id="clear-records" style="margin-top:18px">🗑 清空所有紀錄(持倉 + 交易)</button>`
+    : '';
   if (portfolio.positions.length === 0) {
-    return `<p class="empty big">目前空倉。到「今日」分頁依買進訊號建倉，最多 6 檔。</p>`;
+    return `<p class="empty big">目前空倉。到「今日」分頁依買進訊號建倉，最多 6 檔。</p>${clearBtn}`;
   }
   const quoteBy = Object.fromEntries(state.quotes.map((q) => [q.symbol, q]));
   return `
@@ -207,7 +213,7 @@ function renderPortfolio() {
       const q = quoteBy[p.symbol];
       const last = q ? q.price : (p.lastPrice ?? p.entryPrice);
       const pnl = (last - p.entryPrice) / p.entryPrice;
-      const secName = SECTORS.find((x) => x.etf === p.etf)?.name || p.etf;
+      const secName = p.etf ? (SECTORS.find((x) => x.etf === p.etf)?.name || p.etf) : '自選股';
       const { hardStop, trailStop, effStop } = computeStops(p, DP);
       const maRef = q ? `MA20 $${q.ma20.toFixed(2)} · MA50 $${q.ma50.toFixed(2)}` : '';
       return `
@@ -229,7 +235,8 @@ function renderPortfolio() {
             <button class="btn ghost" data-sell="${p.symbol}">平倉</button>
           </div>
         </div>`;
-    }).join('')}`;
+    }).join('')}
+    ${clearBtn}`;
 }
 
 function renderSectors() {
@@ -291,6 +298,12 @@ function renderPerf() {
     <h2 class="block-head">交易紀錄 <span class="head-note">最新在上</span></h2>
     ${[...portfolio.cashLog].reverse().map(tradeRow).join('')}
   `;
+}
+
+// 自選股清理:沒在持倉裡的自選股,從每日抓取清單移除(省 API 額度)
+function pruneExtras() {
+  const held = new Set(portfolio.positions.map((p) => p.symbol));
+  for (const x of getExtras()) if (!held.has(x.symbol)) removeExtraSymbol(x.symbol);
 }
 
 // ---- 市場環境戳記(Minervini 心法:記錄「這筆交易是在什麼市場環境下做的」)----
@@ -513,7 +526,8 @@ function renderExploreResults() {
           <div class="card-side">
             <div class="price mono">$${r.price.toFixed(2)}</div>
             <div class="score">動能 ${r.score.toFixed(2)}</div>
-            ${r.pass ? `<button class="btn ghost" data-watch="${r.symbol}">★ 觀察</button>` : ''}
+            ${r.pass ? `<button class="btn buy" data-xbuy="${r.symbol}">買進</button>
+            <button class="btn ghost" data-watch="${r.symbol}">★ 觀察</button>` : ''}
           </div>
         </div>`;
     }).join('')}`;
@@ -585,6 +599,13 @@ function bindViewEvents() {
       }
       await compute(); render();
     });
+  const clearBtn = document.getElementById('clear-records');
+  if (clearBtn) clearBtn.onclick = async () => {
+    if (!confirm('確定清空所有持倉與交易紀錄?此動作無法復原(不會影響 16 年回測歷史)。')) return;
+    portfolio.reset();
+    toast('已清空所有紀錄');
+    await compute(); render();
+  };
   const loadHist = document.getElementById('load-hist');
   if (loadHist) loadHist.onclick = () => loadHistory();
   const reloadHist = document.getElementById('reload-hist');
@@ -617,6 +638,26 @@ function bindViewEvents() {
     if (!t.length) { toast('觀察名單是空的'); return; }
     verifyCandidates(t);
   };
+  document.querySelectorAll('[data-xbuy]').forEach((el) => el.onclick = async () => {
+    const sym = el.dataset.xbuy;
+    const r = exploreResults && exploreResults.find((x) => x.symbol === sym);
+    if (!r || !r.pass) return;
+    const u = UNIVERSE.find((x) => x.symbol === sym);   // 在 universe 裡就沿用它的板塊
+    const res = portfolio.buy({
+      symbol: sym, name: u ? u.name : sym, etf: u ? u.etf : null,
+      price: r.entry, stopPrice: r.stopPrice, atr: r.atr,
+      entryEnv: currentMarketEnv(),
+    });
+    if (!res.ok) { toast(res.msg); return; }
+    if (!u) {
+      // 自選股:登記進每日抓取清單,並把剛抓到的日線直接餵進快取(免再打 API)
+      addExtraSymbol(sym, sym);
+      adapter.seedSeries(sym, exploreBars[sym]);
+    }
+    toast(`已買進 ${sym}${u ? '' : '(自選股)'}`);
+    state.tab = 'portfolio';
+    await compute(); render();
+  });
   document.querySelectorAll('[data-watch]').forEach((el) => el.onclick = () => saveWatch(el.dataset.watch));
   document.querySelectorAll('[data-unwatch]').forEach((el) => el.onclick = () => removeWatch(el.dataset.unwatch));
   const fetchMoversBtn = document.getElementById('fetch-movers');
@@ -711,6 +752,7 @@ async function verifyCandidates(explicit) {
     } catch (e) { /* 無 SPY 時 RS 用 0 基準 */ }
 
     const bars = await fetchCandidates(tickers);
+    exploreBars = bars;
     const caps = await fetchMarketCaps(tickers);   // FMP 免費市值
     const results = tickers.map((t) => {
       const m = quoteMetrics(bars[t]);

@@ -270,6 +270,9 @@ export class MockDataAdapter {
     return bars.map((b) => b.c).slice(-days); // 回測用收盤價
   }
 
+  // 介面對齊(真實版才需要;模擬模式不做事)
+  seedSeries() { /* no-op */ }
+
   // 市場水位資料(模擬):SPY + VIX
   async getMarketSeries() {
     return { spy: this.spySeries, vix: this.vixSeries };

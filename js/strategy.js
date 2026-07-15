@@ -89,6 +89,7 @@ export function verifyTrendTemplate(q, market = {}, params = {}) {
     rsVsSpy: q.ret6m - spyRet6m,
     pctFrom52wHigh: q.pctFrom52wHigh,
     marketCap: q.marketCap ?? null,
+    atr: q.atr ?? null,
     entry: q.price, stopPrice, stopPct: (stopPrice - q.price) / q.price,
   };
 }
@@ -218,7 +219,8 @@ export function generateSells(positions, quotes, rankedSectors, params = STRATEG
     const fullReasons = [];
     if (price <= hardStop) fullReasons.push(`觸及停損 $${hardStop.toFixed(2)} (${(pnlPct * 100).toFixed(1)}%)`);
     if (price <= trailStop && price > hardStop) fullReasons.push(`移動停利 $${trailStop.toFixed(2)}`);
-    if ((rankBy[pos.etf] ?? 99) > params.sectorExitRank) fullReasons.push('板塊退燒');
+    // 自選股(從探索買進,無板塊對映)不套用板塊退燒規則,否則會被誤判立刻出場
+    if (pos.etf && (rankBy[pos.etf] ?? 99) > params.sectorExitRank) fullReasons.push('板塊退燒');
     if (q.relMA20 <= params.momentumBreakBuffer) fullReasons.push('跌破 MA20，動能轉弱');
     if (fullReasons.length > 0) {
       sells.push({ symbol: pos.symbol, name: pos.name, price, pnlPct, reasons: fullReasons, fraction: size });

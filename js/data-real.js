@@ -18,8 +18,26 @@ import { atr } from './indicators.js';
 const CACHE_PREFIX = 'td_ohlc_';             // localStorage key 前綴(OHLC 版,舊快取自動失效重抓)
 const todayKey = () => CACHE_PREFIX + new Date().toISOString().slice(0, 10);
 
-// 要抓的全部代號 = 11 板塊 ETF + 43 股票 + SPY(市場水位趨勢腿用)
-const ALL_SYMBOLS = [...SECTORS.map((s) => s.etf), ...UNIVERSE.map((u) => u.symbol), 'SPY'];
+// 要抓的全部代號 = 11 板塊 ETF + universe 股票 + SPY(市場水位趨勢腿用)
+const BASE_SYMBOLS = [...SECTORS.map((s) => s.etf), ...UNIVERSE.map((u) => u.symbol), 'SPY'];
+
+// ---- 自選股(從「探索」買進、不在 universe 裡的)----
+// 存 localStorage,讓它們每天跟著一起抓報價,否則持倉不會更新、停損不會觸發。
+const EXTRA_KEY = 'sd_extra_symbols';
+export function getExtras() {
+  try { return JSON.parse(localStorage.getItem(EXTRA_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveExtras(list) {
+  try { localStorage.setItem(EXTRA_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+}
+export function addExtraSymbol(symbol, name) {
+  const list = getExtras();
+  if (!list.some((x) => x.symbol === symbol)) { list.push({ symbol, name: name || symbol }); saveExtras(list); }
+}
+export function removeExtraSymbol(symbol) {
+  saveExtras(getExtras().filter((x) => x.symbol !== symbol));
+}
+const allSymbols = () => [...new Set([...BASE_SYMBOLS, ...getExtras().map((x) => x.symbol)])];
 
 export class RealDataAdapter {
   constructor(config) {
@@ -57,12 +75,13 @@ export class RealDataAdapter {
 
     // 先吃快取,只補還沒有的代號
     this._loadCache();
-    const missing = ALL_SYMBOLS.filter((s) => !this.series[s] || this.series[s].length === 0);
+    const symbols = allSymbols();
+    const missing = symbols.filter((s) => !this.series[s] || this.series[s].length === 0);
 
     if (missing.length === 0) { this.loaded = true; return; }
 
     const { BATCH_SIZE, BATCH_GAP_MS, OUTPUT_SIZE, WORKER_URL } = this.cfg;
-    let done = ALL_SYMBOLS.length - missing.length;
+    let done = symbols.length - missing.length;
 
     for (let i = 0; i < missing.length; i += BATCH_SIZE) {
       const batch = missing.slice(i, i + BATCH_SIZE);
@@ -85,11 +104,11 @@ export class RealDataAdapter {
       this._saveCache();
 
       done += batch.length;
-      if (onProgress) onProgress(done, ALL_SYMBOLS.length, 'loading');
+      if (onProgress) onProgress(done, symbols.length, 'loading');
 
       // 還有下一批 -> 等節流時間(免費層每分鐘 8 檔)
       if (i + BATCH_SIZE < missing.length && BATCH_GAP_MS > 0) {
-        if (onProgress) onProgress(done, ALL_SYMBOLS.length, 'waiting');
+        if (onProgress) onProgress(done, symbols.length, 'waiting');
         await sleep(BATCH_GAP_MS);
       }
     }
@@ -125,9 +144,22 @@ export class RealDataAdapter {
 
   async getQuotes() {
     await this.ensureLoaded();
-    return UNIVERSE
+    // universe + 自選股(自選股 etf = null,不參與板塊輪動,但要有報價才能更新持倉/觸發停損)
+    const list = [
+      ...UNIVERSE,
+      ...getExtras().filter((x) => !UNIVERSE.some((u) => u.symbol === x.symbol))
+        .map((x) => ({ symbol: x.symbol, name: x.name, etf: null })),
+    ];
+    return list
       .filter((u) => this.series[u.symbol] && this.series[u.symbol].length >= 63)
       .map((u) => ({ symbol: u.symbol, name: u.name, etf: u.etf, ...this._metrics(this.series[u.symbol]) }));
+  }
+
+  // 直接把已抓好的 bars 塞進快取(從「探索」買進時用,免再打一次 API)
+  seedSeries(symbol, bars) {
+    if (!bars || !bars.length) return;
+    this.series[symbol] = bars;
+    this._saveCache();
   }
 
   async getSectorETFs() {
