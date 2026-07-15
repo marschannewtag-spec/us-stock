@@ -268,3 +268,16 @@ body {
 /* ---- 交易紀錄:市場環境戳記 ---- */
 .trade-env { display: block; font-size: 11px; color: var(--heat); margin-top: 3px;
   opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 手動加入持倉 ---- */
+.addpos { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 13px; margin-top: 14px; }
+.addpos-head { font-size: 13px; color: var(--text); margin-bottom: 10px; }
+.addpos-head .head-note { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.addpos-row { display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.addpos-row:last-child { margin-bottom: 0; }
+.ap-in { flex: 1; min-width: 90px; background: var(--surface2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; font-size: 13px; }
+.ap-in:focus { outline: none; border-color: var(--heat); }
+.mtag { font-size: 10px; background: var(--surface2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 1px 5px; color: var(--heat); }

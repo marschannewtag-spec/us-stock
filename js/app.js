@@ -37,6 +37,7 @@ let exploreRunning = false;
 let exploreProgress = '';
 let exploreResults = null;
 let exploreBars = {};      // 探索最近一次抓到的日線(買進時 seed 給 adapter 用)
+let showAddPos = false;    // 手動加入持倉表單開合
 
 // ---- 每天重新計算: 報價 -> 板塊排名 -> 買賣訊號 ----
 async function compute() {
@@ -198,13 +199,33 @@ function sellCard(s) {
     </div>`;
 }
 
+function addPosForm() {
+  if (!showAddPos) {
+    return `<button class="btn ghost wide" id="add-pos-toggle" style="margin-top:14px">＋ 手動加入持倉(你自己買的)</button>`;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  return `
+    <div class="addpos">
+      <div class="addpos-head">手動加入持倉<span class="head-note">系統會用真實資料算 ATR 停損,之後跟其他持倉一樣給出場建議</span></div>
+      <div class="addpos-row">
+        <input id="ap-sym" class="ap-in mono" placeholder="代號 例 PLTR" />
+        <input id="ap-price" class="ap-in mono" placeholder="你的進場價" inputmode="decimal" />
+        <input id="ap-date" class="ap-in mono" type="date" value="${today}" />
+      </div>
+      <div class="addpos-row">
+        <button class="btn buy" id="add-pos-submit">加入</button>
+        <button class="btn ghost" id="add-pos-cancel">取消</button>
+      </div>
+    </div>`;
+}
+
 function renderPortfolio() {
   const hasData = portfolio.positions.length > 0 || portfolio.cashLog.length > 0;
   const clearBtn = hasData
     ? `<button class="btn ghost wide" id="clear-records" style="margin-top:18px">🗑 清空所有紀錄(持倉 + 交易)</button>`
     : '';
   if (portfolio.positions.length === 0) {
-    return `<p class="empty big">目前空倉。到「今日」分頁依買進訊號建倉，最多 6 檔。</p>${clearBtn}`;
+    return `<p class="empty big">目前空倉。到「今日」分頁依買進訊號建倉，最多 6 檔。</p>${addPosForm()}${clearBtn}`;
   }
   const quoteBy = Object.fromEntries(state.quotes.map((q) => [q.symbol, q]));
   return `
@@ -220,7 +241,7 @@ function renderPortfolio() {
         <div class="card pos">
           <div class="card-main">
             <div class="ticker mono">${p.symbol}</div>
-            <div class="card-sub">${p.name} · ${secName} · 進場 ${p.entryDate} @ $${p.entryPrice.toFixed(2)}${
+            <div class="card-sub">${p.name} · ${secName}${p.manual ? ' · <span class="mtag">手動</span>' : ''} · 進場 ${p.entryDate} @ $${p.entryPrice.toFixed(2)}${
               (p.size ?? 1) < 0.999 ? ` · <span class="down">剩 ${Math.round((p.size ?? 1) * 100)}%</span>` : ''
             }</div>
             <div class="levels mono">
@@ -236,6 +257,7 @@ function renderPortfolio() {
           </div>
         </div>`;
     }).join('')}
+    ${addPosForm()}
     ${clearBtn}`;
 }
 
@@ -599,6 +621,12 @@ function bindViewEvents() {
       }
       await compute(); render();
     });
+  const apToggle = document.getElementById('add-pos-toggle');
+  if (apToggle) apToggle.onclick = () => { showAddPos = true; render(); };
+  const apCancel = document.getElementById('add-pos-cancel');
+  if (apCancel) apCancel.onclick = () => { showAddPos = false; render(); };
+  const apSubmit = document.getElementById('add-pos-submit');
+  if (apSubmit) apSubmit.onclick = () => addManualPosition();
   const clearBtn = document.getElementById('clear-records');
   if (clearBtn) clearBtn.onclick = async () => {
     if (!confirm('確定清空所有持倉與交易紀錄?此動作無法復原(不會影響 16 年回測歷史)。')) return;
@@ -673,6 +701,43 @@ function bindViewEvents() {
       await verifyCandidates(top);
     } catch (e) { toast('熱門榜失敗:' + (e.message || e)); }
   };
+}
+
+// ---- 手動加入持倉(你自己在外面買的股票,一樣納入出場建議)----
+async function addManualPosition() {
+  const sym = (document.getElementById('ap-sym')?.value || '').trim().toUpperCase();
+  const priceRaw = (document.getElementById('ap-price')?.value || '').trim();
+  const date = (document.getElementById('ap-date')?.value || '').trim() || null;
+  const entryPrice = parseFloat(priceRaw);
+
+  if (!/^[A-Z.]{1,6}$/.test(sym)) { toast('請輸入有效代號'); return; }
+  if (!(entryPrice > 0)) { toast('請輸入你的進場價'); return; }
+  if (portfolio.has(sym)) { toast('已持有此標的'); return; }
+  if (portfolio.isFull()) { toast(`已達 ${DAILY_MAX} 倉上限`); return; }
+  if (!config.WORKER_URL) { toast('尚未設定 Worker 網址'); return; }
+
+  toast(`讀取 ${sym} 資料…`);
+  try {
+    const bars = await fetchCandidates([sym]);
+    const m = quoteMetrics(bars[sym]);
+    if (!m) { toast(`${sym} 資料不足或代號無效`); return; }
+
+    // 停損用「你的進場價」算,不是現價
+    const stopPrice = m.atr ? entryPrice - m.atr * DP.atrStopMult : entryPrice * (1 + DP.stopLossPct);
+    const u = UNIVERSE.find((x) => x.symbol === sym);
+    const r = portfolio.buy({
+      symbol: sym, name: u ? u.name : sym, etf: u ? u.etf : null,
+      price: entryPrice, stopPrice, atr: m.atr,
+      entryEnv: currentMarketEnv(), entryDate: date, manual: true,
+    });
+    if (!r.ok) { toast(r.msg); return; }
+    if (!u) { addExtraSymbol(sym, sym); adapter.seedSeries(sym, bars[sym]); }
+    showAddPos = false;
+    toast(`已加入 ${sym} @ $${entryPrice.toFixed(2)}`);
+    await compute(); render();
+  } catch (e) {
+    toast('讀取失敗:' + (e.message || e));
+  }
 }
 
 // 抓 FMP 市值(透過 Worker),回 {SYM: marketCap}

@@ -35,7 +35,7 @@ export const PRESETS = {
     { minStockScore: 0.14, maxPositions: 4, hotSectorCount: 3, atrStopMult: 2.2, trailingStopPct: -0.10, sectorExitRank: 3, reentryCooldownDays: 3 }, 1),
   // 均衡預設 = 你日常在用的那組
   composite: preset('綜合',
-    { minStockScore: 0.13, maxPositions: 6, hotSectorCount: 3, atrStopMult: 2.5, trailingStopPct: -0.12, sectorExitRank: 5, reentryCooldownDays: 5 }, 1),
+    { minStockScore: 0.13, maxPositions: 6, hotSectorCount: 6, atrStopMult: 2.5, trailingStopPct: -0.12, sectorExitRank: 8, reentryCooldownDays: 5 }, 1),
 };
 
 export const PRESET_ORDER = ['marcus', 'uncle', 'gooptions', 'bilaal', 'amber', 'composite'];

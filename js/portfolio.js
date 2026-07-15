@@ -39,7 +39,7 @@ export class Portfolio {
   has(symbol) { return this.positions.some((p) => p.symbol === symbol); }
 
   // 買進。需求 1: 滿 6 倉或已持有 -> 拒絕。
-  buy({ symbol, name, etf, price, shares = 1, stopPrice = null, atr = null, entryEnv = null }) {
+  buy({ symbol, name, etf, price, shares = 1, stopPrice = null, atr = null, entryEnv = null, entryDate = null, manual = false }) {
     if (this.isFull()) return { ok: false, msg: '已達 6 倉上限' };
     if (this.has(symbol)) return { ok: false, msg: '已持有此標的' };
     this.positions.push({
@@ -48,7 +48,8 @@ export class Portfolio {
       stopPrice, atr,                                  // 進場時鎖定的 ATR 停損價
       size: 1, laddersFired: [],                       // 分批停利:剩餘比例 + 已觸發的階
       entryEnv,                                         // 進場時的市場環境戳記(Minervini 心法)
-      entryDate: new Date().toISOString().slice(0, 10),
+      manual,                                           // true = 你自己在外面買的,非系統訊號
+      entryDate: entryDate || new Date().toISOString().slice(0, 10),
     });
     this.save();
     return { ok: true };
