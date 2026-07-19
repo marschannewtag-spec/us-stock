@@ -219,9 +219,13 @@ export function generateSells(positions, quotes, rankedSectors, params = STRATEG
     const fullReasons = [];
     if (price <= hardStop) fullReasons.push(`觸及停損 $${hardStop.toFixed(2)} (${(pnlPct * 100).toFixed(1)}%)`);
     if (price <= trailStop && price > hardStop) fullReasons.push(`移動停利 $${trailStop.toFixed(2)}`);
-    // 自選股(從探索買進,無板塊對映)不套用板塊退燒規則,否則會被誤判立刻出場
-    if (pos.etf && (rankBy[pos.etf] ?? 99) > params.sectorExitRank) fullReasons.push('板塊退燒');
-    if (q.relMA20 <= params.momentumBreakBuffer) fullReasons.push('跌破 MA20，動能轉弱');
+    // 板塊退燒 + 跌破MA20:六姿態 16 年 A/B 測試證實這兩條規則傷害 Calmar
+    // (5/6 姿態 A>B,交易次數暴增造成 whipsaw「昨天買今天賣」),故日常引擎
+    // 預設關閉,只留已驗證的 ATR 停損 + 移動停利。要恢復設 params.useSignalExits=true。
+    if (params.useSignalExits) {
+      if (pos.etf && (rankBy[pos.etf] ?? 99) > params.sectorExitRank) fullReasons.push('板塊退燒');
+      if (q.relMA20 <= params.momentumBreakBuffer) fullReasons.push('跌破 MA20，動能轉弱');
+    }
     if (fullReasons.length > 0) {
       sells.push({ symbol: pos.symbol, name: pos.name, price, pnlPct, reasons: fullReasons, fraction: size });
       continue;
