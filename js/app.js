@@ -403,8 +403,9 @@ function renderBacktest() {
            <button class="btn ghost wide" id="run-real-bt">▶ 用真實 16 年資料回測(綜合)</button>`}
 
     <h2 class="block-head">六姿態比較 <span class="head-note">Monte Carlo 300 次 · Calmar 排名</span></h2>
-    <div class="warn-box">六個 preset 各跑 16 年真實回測,再各做 300 次 block bootstrap(把日報酬打散重組),看績效換個順序還站不站得住。
-      <br>看<strong>相對排名</strong>就好,絕對數字仍被生存者偏差灌水。<strong>Calmar 最差 5%</strong> 是壓力測試下的下限。</div>
+    <div class="warn-box">六個 preset 各跑<strong>兩次</strong> 16 年真實回測(A:只用 ATR/移動停利 vs B:再加板塊退燒/跌破MA20),各做 300 次 block bootstrap。
+      這是要回答:<strong>「板塊退燒」這條規則到底在幫你還是害你?</strong>(它從來沒被驗證過)
+      <br>看<strong>相對比較</strong>就好,絕對數字仍被生存者偏差灌水。</div>
     ${mcSection()}`;
 }
 
@@ -415,30 +416,51 @@ function mcSection() {
   }
   if (mcError) return `<p class="empty">${mcError}</p><button class="btn buy wide" id="run-mc">▶ 重試</button>`;
   if (!mcResults) {
-    return `<p class="empty">六姿態一起跑 + Monte Carlo(手機約 20~40 秒,中途會卡一下屬正常)。</p>
-      <button class="btn buy wide" id="run-mc">▶ 跑六姿態 + Monte Carlo (300 次)</button>`;
+    return `<p class="empty">六姿態 × A/B 各跑一次 + Monte Carlo(要跑 12 次回測,約 1~2 分鐘,中途會卡住屬正常)。</p>
+      <button class="btn buy wide" id="run-mc">▶ 跑 A/B 測試(六姿態 × 300 次 MC)</button>`;
   }
   const rows = mcResults.map((r, i) => {
-    const win = i === 0;
-    return `<tr class="${win ? 'mc-win' : ''}">
+    const ca = r.a.mc.calmar.median, cb = r.b.mc.calmar.median;
+    const better = cb > ca ? 'B' : 'A';
+    const diff = cb - ca;
+    return `<tr class="${i === 0 ? 'mc-win' : ''}">
       <td class="mono">${i + 1}</td>
-      <td>${r.label}${win ? ' 🏆' : ''}</td>
-      <td class="mono">${r.mc.calmar.median.toFixed(2)}</td>
-      <td class="mono down">${r.mc.calmar.p5.toFixed(2)}</td>
-      <td class="mono up">${(r.mc.cagr.median * 100).toFixed(0)}%</td>
-      <td class="mono down">${(r.mc.maxdd.median * 100).toFixed(0)}%</td>
-      <td class="mono">${r.single.trades}</td>
+      <td>${r.label}${i === 0 ? ' 🏆' : ''}</td>
+      <td class="mono">${ca.toFixed(2)}</td>
+      <td class="mono">${cb.toFixed(2)}</td>
+      <td class="mono ${diff >= 0 ? 'up' : 'down'}">${diff >= 0 ? '+' : ''}${diff.toFixed(2)}</td>
+      <td class="mono">${better === 'A' ? 'A' : 'B'}</td>
+      <td class="mono">${r.a.single.trades}/${r.b.single.trades}</td>
     </tr>`;
   }).join('');
+
+  // 判定:6 個姿態裡,含訊號出場(B)贏了幾個?
+  const bWins = mcResults.filter((r) => r.b.mc.calmar.median > r.a.mc.calmar.median).length;
+  const verdict = bWins >= 4
+    ? `<strong class="up">板塊退燒/跌破MA20 是有幫助的</strong>(6 個姿態中 ${bWins} 個變好)。建議保留,但可加「連續 N 天才出場」的遲滯來減少 whipsaw。`
+    : bWins <= 2
+      ? `<strong class="down">板塊退燒/跌破MA20 在傷害績效</strong>(6 個姿態中只有 ${bWins} 個變好)。建議從日常引擎移除,只留 ATR 停損 + 移動停利——那才是你驗證過的那套。`
+      : `結果分歧(6 個中 ${bWins} 個變好),沒有明確結論。建議看你日常用的「綜合」那一列決定。`;
+
+  const comp = mcResults.find((r) => r.key === (config.DAILY_PRESET || 'composite'));
+  const compLine = comp
+    ? `你日常用的「${comp.label}」:A ${comp.a.mc.calmar.median.toFixed(2)} vs B ${comp.b.mc.calmar.median.toFixed(2)}
+       ／交易 ${comp.a.single.trades} vs ${comp.b.single.trades} 筆。`
+    : '';
+
   return `
     <div class="mc-table-wrap"><table class="mc-table">
       <thead><tr>
-        <th>#</th><th>姿態</th><th>Calmar<br>中位</th><th>Calmar<br>最差5%</th><th>CAGR<br>中位</th><th>MaxDD<br>中位</th><th>交易</th>
+        <th>#</th><th>姿態</th><th>A<br>ATR/移動停利</th><th>B<br>+板塊退燒</th><th>差異</th><th>較優</th><th>交易<br>A/B</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <p class="hint" style="margin-top:12px">冠軍 <strong>${mcResults[0].label}</strong>:Calmar 中位 ${mcResults[0].mc.calmar.median.toFixed(2)}、
-    最差 5% 仍有 ${mcResults[0].mc.calmar.p5.toFixed(2)}。這是「風險調整後 + 耐操度」都最好的姿態。</p>
+    <p class="hint" style="margin-top:12px">
+      <strong>A</strong> = 只用 ATR 停損 + 移動停利(你 16 年回測驗證過的那套)。
+      <strong>B</strong> = 再加上「板塊退燒 + 跌破MA20」(你每天在「今日」看到的賣出建議)。兩者參數完全相同,唯一差別就是這兩條出場規則。
+    </p>
+    <p class="hint" style="margin-top:8px">${compLine}</p>
+    <p class="hint" style="margin-top:8px">結論:${verdict}</p>
     <button class="btn ghost wide" id="run-mc" style="margin-top:12px">↻ 重跑</button>`;
 }
 
@@ -870,17 +892,28 @@ async function runAllPresetsMC() {
 
   const results = [];
   for (const key of PRESET_ORDER) {
-    mcProgress = `回測 + Monte Carlo:${PRESETS[key].label} … (${results.length + 1}/6)`;
-    render();
-    await sleep(30); // 讓進度先畫出來,再進重運算
     const P = PRESETS[key];
-    const bt = runRealBacktest({ barsBySymbol, params: P.params, market: P.market });
-    const mc = monteCarlo(bt.dailyReturns, 300, 20);
-    results.push({ key, label: P.label, single: bt.metrics, mc });
+    // A/B:同一組參數跑兩次,唯一差別是「有沒有板塊退燒 + 跌破MA20 出場」
+    mcProgress = `${P.label} … A:只用 ATR/移動停利 (${results.length + 1}/6)`;
+    render(); await sleep(30);
+    const btA = runRealBacktest({ barsBySymbol, params: P.params, market: P.market, useSignalExits: false });
+    const mcA = monteCarlo(btA.dailyReturns, 300, 20);
     await sleep(0);
+
+    mcProgress = `${P.label} … B:加板塊退燒/跌破MA20 (${results.length + 1}/6)`;
+    render(); await sleep(30);
+    const btB = runRealBacktest({ barsBySymbol, params: P.params, market: P.market, useSignalExits: true });
+    const mcB = monteCarlo(btB.dailyReturns, 300, 20);
+    await sleep(0);
+
+    results.push({
+      key, label: P.label,
+      a: { single: btA.metrics, mc: mcA },   // 已驗證過的那套(只有 ATR/移動停利)
+      b: { single: btB.metrics, mc: mcB },   // 你每天實際在看的那套
+    });
   }
-  // 以 Calmar 中位數排名
-  results.sort((a, b) => (b.mc?.calmar.median ?? -99) - (a.mc?.calmar.median ?? -99));
+  // 以 A(已驗證基準)的 Calmar 中位排名
+  results.sort((x, y) => (y.a.mc?.calmar.median ?? -99) - (x.a.mc?.calmar.median ?? -99));
   mcResults = results; mcRunning = false; render();
 }
 

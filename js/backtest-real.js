@@ -59,7 +59,7 @@ function navNow(cash, positions, barsBySymbol, idx, date) {
 }
 
 // 主函式
-export function runRealBacktest({ barsBySymbol, params, market, rebalanceEvery = 5, warmup = 63 }) {
+export function runRealBacktest({ barsBySymbol, params, market, rebalanceEvery = 5, warmup = 63, useSignalExits = false }) {
   const maxPos = params.maxPositions ?? MAX_POSITIONS;
   const spyBars = barsBySymbol['SPY'] || [];
   const cal = spyBars.map((b) => b.d);          // 主行事曆 = SPY 交易日
@@ -80,11 +80,30 @@ export function runRealBacktest({ barsBySymbol, params, market, rebalanceEvery =
   const positions = [];      // {symbol, etf, shares, entryPrice, peakPrice, stopPrice, atr}
   const equity = [], trades = [];
   let pendingBuys = [];
+  let pendingExits = [];     // 訊號出場(板塊退燒/跌破MA20)-> 隔日開盤成交
 
   for (let t = warmup; t < cal.length; t++) {
     const date = cal[t];
 
-    // 1) 開盤成交昨日排定的買單
+    // 1a) 開盤先執行昨日的訊號出場(隔日開盤成交,與進場同規矩)
+    for (const ex of pendingExits) {
+      const pi = positions.findIndex((p) => p.symbol === ex.symbol);
+      if (pi < 0) continue;
+      const j = idx[ex.symbol] && idx[ex.symbol][date];
+      if (j == null) continue;
+      const openP = barsBySymbol[ex.symbol][j].o;
+      if (!openP || openP <= 0) continue;
+      const p = positions[pi];
+      cash += p.shares * openP;
+      trades.push({
+        symbol: p.symbol, pnlPct: (openP - p.entryPrice) / p.entryPrice,
+        reason: ex.reason, exitDate: date,
+      });
+      positions.splice(pi, 1);
+    }
+    pendingExits = [];
+
+    // 1b) 開盤成交昨日排定的買單
     for (const b of pendingBuys) {
       if (positions.length >= maxPos) break;
       const j = idx[b.symbol] && idx[b.symbol][date];
@@ -128,13 +147,37 @@ export function runRealBacktest({ barsBySymbol, params, market, rebalanceEvery =
     // 3) 收盤記 NAV
     equity.push({ date, nav: navNow(cash, positions, barsBySymbol, idx, date) });
 
-    // 4) 換倉日:市場水位 + 選股 -> 排明天開盤買單
-    if ((t - warmup) % rebalanceEvery === 0 && positions.length < maxPos) {
+    // 4) 收盤後:訊號出場判定 + 換倉選股(共用同一份 quotes/ranked)
+    const isRebalance = (t - warmup) % rebalanceEvery === 0;
+    const needQuotes = (useSignalExits && positions.length > 0) || (isRebalance && positions.length < maxPos);
+    let quotes = null, ranked = null;
+    if (needQuotes) {
+      quotes = buildQuotes(symbols, idx, ind, date, barsBySymbol);
+      ranked = rankSectors(buildSectors(quotes), params.hotSectorCount);
+    }
+
+    // 4a) 訊號出場:板塊退燒 / 跌破 MA20(A/B 測試用;預設關閉 = 只用 ATR/移動停利)
+    if (useSignalExits && ranked) {
+      const rankBy = Object.fromEntries(ranked.map((r) => [r.etf, r.rank]));
+      for (const p of positions) {
+        const j = idx[p.symbol][date];
+        if (j == null) continue;
+        const reasons = [];
+        if (p.etf && (rankBy[p.etf] ?? 99) > params.sectorExitRank) reasons.push('板塊退燒');
+        if (ind[p.symbol].relMA20[j] <= params.momentumBreakBuffer) reasons.push('跌破MA20');
+        if (reasons.length) pendingExits.push({ symbol: p.symbol, reason: reasons.join('/') });
+      }
+    }
+
+    // 4b) 換倉日:市場水位 + 選股 -> 排明天開盤買單
+    if (isRebalance && positions.length < maxPos) {
       const si = spyDate[date];
       const gate = computeMarketGate(spyClose.slice(0, si + 1), null, market);
       if (gate.available && gate.riskOn) {
-        const quotes = buildQuotes(symbols, idx, ind, date, barsBySymbol);
-        const ranked = rankSectors(buildSectors(quotes), params.hotSectorCount);
+        if (!quotes) {
+          quotes = buildQuotes(symbols, idx, ind, date, barsBySymbol);
+          ranked = rankSectors(buildSectors(quotes), params.hotSectorCount);
+        }
         const sold = recentSold(trades, date, params);
         const buys = generateBuys(quotes, ranked, positions, params, sold);
         pendingBuys = buys.slice(0, maxPos - positions.length);
